@@ -5,9 +5,9 @@ async function runTests() {
 
     // 1. DATA FOR A NEW LOCAL OWNER IN EL CHOCÓ ANDINO
     const newOwner = {
-        name: "Carlos Cueva",
-        email: "carlos@chocoandino.com",
-        password: "securePassword123",
+        name: "Daniela Perez",
+        email: "daniela@chocoandino.com",
+        password: "securePassword456",
         role: "owner"
     };
 
