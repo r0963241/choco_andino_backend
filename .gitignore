@@ -1,0 +1,15 @@
+# Ignore node_modules in ANY folder or subfolder
+**/node_modules/
+node_modules/
+
+# Ignore local environment variables with database passwords
+**/.env
+.env
+
+# Ignore Vue production build outputs
+**/dist/
+dist/
+
+# Ignore Mac system files
+.DS_Store
+**/.DS_Store
