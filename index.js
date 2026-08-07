@@ -2,6 +2,9 @@
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 require('dotenv').config(); // Loads variables from your hidden .env file
 
 const app = express();
@@ -9,8 +12,25 @@ const app = express();
 // 2. MIDDLEWARE CONFIGURATIONS
 app.use(cors());          // Allows my Vue.js frontend to securely talk to this API
 app.use(express.json());  // Enables my server to read incoming JSON data from forms
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
 
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+    }
+});
+
+const upload = multer({ storage });
 
 // 3. DATABASE CONNECTION CONFIGURATION
 // This uses a "Pool", which keeps open connections ready for fast data querying
@@ -27,7 +47,9 @@ const db = mysql.createPool({
 
 // 4. ROUTE MOUNTING
 const authRoutes = require('./routes/auth.js')(db);
+const accommodationRoutes = require('./routes/accommodations.js')(db);
 app.use('/api/auth', authRoutes);
+app.use('/api/accommodations', accommodationRoutes);
 // Test the database connection instantly when starting the server
 db.getConnection()
     .then(() => console.log('Successfully connected to the Chocó Andino MySQL database!'))
@@ -36,15 +58,31 @@ db.getConnection()
         console.log('TIP: Check if  XAMPP MySQL is active and my password in .env is correct.');
     });
 
+app.post('/api/upload-image', upload.single('image'), (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ message: 'No image file provided.' });
+    }
+
+    const imageUrl = `/uploads/${req.file.filename}`;
+    res.status(200).json({ imageUrl });
+});
+
 // 5. FIRST REST API ENDPOINT (READ - GET)
 // When my Vue frontend requests this URL, it fetches all approved site accommodations
 app.get('/api/accommodations', async (req, res) => {
     try {
         // Query the database safely
-        const [rows] = await db.query("SELECT * FROM accommodations WHERE status = 'approved'");
-        
+        const [rows] = await db.query(
+            "SELECT id, owner_id, title, description, price_per_night, location, status, image_url FROM accommodations WHERE status = 'approved'"
+        );
+
+        const accommodationsWithImage = rows.map((cabin) => ({
+            ...cabin,
+            image_url: cabin.image_url || 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80'
+        }));
+
         // Send the database rows back to the frontend browser as clean JSON data
-        res.status(200).json(rows);
+        res.status(200).json(accommodationsWithImage);
     } catch (error) {
         // Clear student error logging
         console.error('Error fetching accommodations:', error);
