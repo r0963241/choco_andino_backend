@@ -45,6 +45,34 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
+async function ensureAccommodationSchema() {
+    const requiredColumns = [
+        { name: 'address', definition: 'VARCHAR(255) NULL' },
+        { name: 'property_type', definition: 'VARCHAR(50) NULL' },
+        { name: 'unit_count', definition: 'INT NULL' },
+        { name: 'has_ac', definition: 'TINYINT(1) DEFAULT 0' },
+        { name: 'has_parking', definition: 'TINYINT(1) DEFAULT 0' },
+        { name: 'has_room_service', definition: 'TINYINT(1) DEFAULT 0' },
+        { name: 'has_private_wc', definition: 'TINYINT(1) DEFAULT 0' }
+    ];
+
+    for (const column of requiredColumns) {
+        const [existingColumns] = await db.query(
+            `SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'accommodations'
+               AND COLUMN_NAME = ?`,
+            [column.name]
+        );
+
+        if (!existingColumns.length) {
+            await db.query(`ALTER TABLE accommodations ADD COLUMN ${column.name} ${column.definition}`);
+            console.log(`Added missing accommodations.${column.name} column.`);
+        }
+    }
+}
+
 // 4. ROUTE MOUNTING
 const authRoutes = require('./routes/auth.js')(db);
 const accommodationRoutes = require('./routes/accommodations.js')(db);
@@ -52,7 +80,11 @@ app.use('/api/auth', authRoutes);
 app.use('/api/accommodations', accommodationRoutes);
 // Test the database connection instantly when starting the server
 db.getConnection()
-    .then(() => console.log('Successfully connected to the Chocó Andino MySQL database!'))
+    .then(async (connection) => {
+        connection.release();
+        console.log('Successfully connected to the Chocó Andino MySQL database!');
+        await ensureAccommodationSchema();
+    })
     .catch((err) => {
         console.error('Database connection failed! Error details:', err.message);
         console.log('TIP: Check if  XAMPP MySQL is active and my password in .env is correct.');

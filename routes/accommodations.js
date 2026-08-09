@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 
 module.exports = function (db) {
+  const validStatuses = ['pending', 'approved', 'rejected'];
+
   router.post('/', async (req, res) => {
     const {
       owner_id,
@@ -63,8 +65,11 @@ module.exports = function (db) {
       );
 
       const [rows] = await db.query(
-        `SELECT id, owner_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url
-         FROM accommodations WHERE id = ?`,
+        `SELECT a.id, a.owner_id, a.title, a.description, a.price_per_night, a.location, a.address, a.property_type, a.unit_count, a.has_ac, a.has_parking, a.has_room_service, a.has_private_wc, a.status, a.image_url, a.created_at,
+                u.name AS owner_name, u.email AS owner_email
+         FROM accommodations a
+         LEFT JOIN users u ON u.id = a.owner_id
+         WHERE a.id = ?`,
         [result.insertId]
       );
 
@@ -81,10 +86,12 @@ module.exports = function (db) {
   router.get('/owner/:ownerId', async (req, res) => {
     try {
       const [rows] = await db.query(
-        `SELECT id, owner_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url
-         FROM accommodations
-         WHERE owner_id = ?
-         ORDER BY id DESC`,
+        `SELECT a.id, a.owner_id, a.title, a.description, a.price_per_night, a.location, a.address, a.property_type, a.unit_count, a.has_ac, a.has_parking, a.has_room_service, a.has_private_wc, a.status, a.image_url, a.created_at,
+                u.name AS owner_name, u.email AS owner_email
+         FROM accommodations a
+         LEFT JOIN users u ON u.id = a.owner_id
+         WHERE a.owner_id = ?
+         ORDER BY a.id DESC`,
         [req.params.ownerId]
       );
 
@@ -95,12 +102,22 @@ module.exports = function (db) {
     }
   });
   router.get('/pending', async (req, res) => {
+    const requestedStatus = req.query.status || 'pending';
+    if (requestedStatus !== 'all' && !validStatuses.includes(requestedStatus)) {
+      return res.status(400).json({ message: 'Status filter must be pending, approved, rejected, or all.' });
+    }
+
     try {
+      const statusClause = requestedStatus === 'all' ? '' : 'WHERE a.status = ?';
+      const queryParams = requestedStatus === 'all' ? [] : [requestedStatus];
       const [rows] = await db.query(
-        `SELECT id, owner_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url
-         FROM accommodations
-         WHERE status = 'pending'
-         ORDER BY id DESC`
+        `SELECT a.id, a.owner_id, a.title, a.description, a.price_per_night, a.location, a.address, a.property_type, a.unit_count, a.has_ac, a.has_parking, a.has_room_service, a.has_private_wc, a.status, a.image_url, a.created_at,
+                u.name AS owner_name, u.email AS owner_email
+         FROM accommodations a
+         LEFT JOIN users u ON u.id = a.owner_id
+         ${statusClause}
+         ORDER BY a.id DESC`,
+        queryParams
       );
 
       res.status(200).json(rows);
