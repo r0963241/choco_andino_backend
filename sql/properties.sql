@@ -1,12 +1,11 @@
 CREATE TABLE IF NOT EXISTS properties (
   id INT AUTO_INCREMENT PRIMARY KEY,
   owner_id INT NULL,
-  name VARCHAR(255) NOT NULL,
+  title VARCHAR(255) NOT NULL,
   address VARCHAR(255) NULL,
-  property_type VARCHAR(50) NULL,
+  property_type VARCHAR(50) NOT NULL,
   unit_count INT NOT NULL DEFAULT 0,
   location VARCHAR(255) NOT NULL,
-  base_price DECIMAL(10,2) NOT NULL,
   description TEXT NOT NULL,
   has_ac TINYINT(1) DEFAULT 0,
   has_parking TINYINT(1) DEFAULT 0,
@@ -15,20 +14,7 @@ CREATE TABLE IF NOT EXISTS properties (
   image_url VARCHAR(500) NULL,
   status VARCHAR(50) DEFAULT 'pending',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS accommodations (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  property_id INT NULL,
-  owner_id INT NULL,
-  title VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL,
-  price_per_night DECIMAL(10,2) NOT NULL,
-  location VARCHAR(255) NOT NULL,
-  status VARCHAR(50) DEFAULT 'pending',
-  image_url VARCHAR(500) NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
+  CONSTRAINT fk_properties_owner
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
 );

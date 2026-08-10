@@ -47,13 +47,20 @@ const db = mysql.createPool({
 
 async function ensureAccommodationSchema() {
     const requiredColumns = [
+        { name: 'property_id', definition: 'INT NULL' },
         { name: 'address', definition: 'VARCHAR(255) NULL' },
         { name: 'property_type', definition: 'VARCHAR(50) NULL' },
         { name: 'unit_count', definition: 'INT NULL' },
         { name: 'has_ac', definition: 'TINYINT(1) DEFAULT 0' },
         { name: 'has_parking', definition: 'TINYINT(1) DEFAULT 0' },
         { name: 'has_room_service', definition: 'TINYINT(1) DEFAULT 0' },
-        { name: 'has_private_wc', definition: 'TINYINT(1) DEFAULT 0' }
+        { name: 'has_private_wc', definition: 'TINYINT(1) DEFAULT 0' },
+        { name: 'accommodation_type', definition: 'VARCHAR(20) NULL' },
+        { name: 'bed_type', definition: 'VARCHAR(20) NULL' },
+        { name: 'max_guests', definition: 'INT NULL' },
+        { name: 'max_adults', definition: 'INT NULL' },
+        { name: 'max_kids', definition: 'INT NULL' },
+        { name: 'max_babies', definition: 'INT NULL' }
     ];
 
     for (const column of requiredColumns) {
@@ -105,7 +112,7 @@ app.get('/api/accommodations', async (req, res) => {
     try {
         // Query the database safely
         const [rows] = await db.query(
-            "SELECT id, owner_id, title, description, price_per_night, location, status, image_url FROM accommodations WHERE status = 'approved'"
+            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, accommodation_type, bed_type, max_guests FROM accommodations WHERE status = 'approved' AND price_per_night > 0"
         );
 
         const accommodationsWithImage = rows.map((cabin) => ({
