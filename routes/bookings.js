@@ -281,5 +281,59 @@ module.exports = function (db) {
     }
   });
 
+  router.patch('/:bookingId/cancel', async (req, res) => {
+    const parsedBookingId = Number(req.params.bookingId);
+    const parsedVisitorId = Number(req.body.visitor_id);
+
+    if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
+      return res.status(400).json({ message: 'bookingId must be a valid positive number.' });
+    }
+
+    if (!Number.isInteger(parsedVisitorId) || parsedVisitorId <= 0) {
+      return res.status(400).json({ message: 'visitor_id is required and must be a valid positive number.' });
+    }
+
+    try {
+      const [rows] = await db.query(
+        `SELECT id, status, COALESCE(check_in_date, booking_date) AS effective_check_in
+         FROM bookings
+         WHERE id = ? AND visitor_id = ?
+         LIMIT 1`,
+        [parsedBookingId, parsedVisitorId]
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ message: 'Booking not found for this visitor.' });
+      }
+
+      const booking = rows[0];
+      if (!['pending', 'confirmed'].includes(String(booking.status || '').toLowerCase())) {
+        return res.status(409).json({ message: `Booking cannot be cancelled from status ${booking.status}.` });
+      }
+
+      const [dateValidation] = await db.query(
+        `SELECT CASE WHEN CURDATE() < DATE(COALESCE(check_in_date, booking_date)) THEN 1 ELSE 0 END AS can_cancel
+         FROM bookings
+         WHERE id = ?
+         LIMIT 1`,
+        [parsedBookingId]
+      );
+
+      if (!dateValidation.length || Number(dateValidation[0].can_cancel) !== 1) {
+        return res.status(409).json({ message: 'Booking can only be cancelled before the check-in date.' });
+      }
+
+      await db.query(
+        'UPDATE bookings SET status = ? WHERE id = ?',
+        ['cancelled', parsedBookingId]
+      );
+
+      return res.status(200).json({ message: 'Booking cancelled successfully.' });
+    } catch (error) {
+      console.error('Error cancelling booking by visitor:', error);
+      return res.status(500).json({ message: 'Server error while cancelling booking.' });
+    }
+  });
+
   return router;
 };
