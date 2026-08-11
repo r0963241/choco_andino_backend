@@ -80,17 +80,43 @@ async function ensureAccommodationSchema() {
     }
 }
 
+async function ensureBookingSchema() {
+    const requiredColumns = [
+        { name: 'check_in_date', definition: 'DATE NULL' },
+        { name: 'check_out_date', definition: 'DATE NULL' }
+    ];
+
+    for (const column of requiredColumns) {
+        const [existingColumns] = await db.query(
+            `SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'bookings'
+               AND COLUMN_NAME = ?`,
+            [column.name]
+        );
+
+        if (!existingColumns.length) {
+            await db.query(`ALTER TABLE bookings ADD COLUMN ${column.name} ${column.definition}`);
+            console.log(`Added missing bookings.${column.name} column.`);
+        }
+    }
+}
+
 // 4. ROUTE MOUNTING
 const authRoutes = require('./routes/auth.js')(db);
 const accommodationRoutes = require('./routes/accommodations.js')(db);
+const bookingRoutes = require('./routes/bookings.js')(db);
 app.use('/api/auth', authRoutes);
 app.use('/api/accommodations', accommodationRoutes);
+app.use('/api/bookings', bookingRoutes);
 // Test the database connection instantly when starting the server
 db.getConnection()
     .then(async (connection) => {
         connection.release();
         console.log('Successfully connected to the Chocó Andino MySQL database!');
         await ensureAccommodationSchema();
+        await ensureBookingSchema();
     })
     .catch((err) => {
         console.error('Database connection failed! Error details:', err.message);
