@@ -83,7 +83,10 @@ async function ensureAccommodationSchema() {
 async function ensureBookingSchema() {
     const requiredColumns = [
         { name: 'check_in_date', definition: 'DATE NULL' },
-        { name: 'check_out_date', definition: 'DATE NULL' }
+        { name: 'check_out_date', definition: 'DATE NULL' },
+        { name: 'adults', definition: 'INT NULL DEFAULT 1' },
+        { name: 'kids', definition: 'INT NULL DEFAULT 0' },
+        { name: 'babies', definition: 'INT NULL DEFAULT 0' }
     ];
 
     for (const column of requiredColumns) {
@@ -138,7 +141,7 @@ app.get('/api/accommodations', async (req, res) => {
     try {
         // Query the database safely
         const [rows] = await db.query(
-            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, accommodation_type, bed_type, max_guests FROM accommodations WHERE status = 'approved' AND property_id IS NOT NULL AND price_per_night > 0"
+            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, property_type, accommodation_type, bed_type, max_guests FROM accommodations WHERE status = 'approved' AND property_id IS NOT NULL AND price_per_night > 0"
         );
 
         const accommodationsWithImage = rows.map((cabin) => ({

@@ -25,6 +25,9 @@ module.exports = function (db) {
       booking_date,
       check_in_date,
       check_out_date,
+      adults = 1,
+      kids = 0,
+      babies = 0,
       status = 'pending'
     } = req.body;
 
@@ -38,6 +41,9 @@ module.exports = function (db) {
 
     const parsedVisitorId = Number(visitor_id);
     const parsedAccommodationId = Number(accommodation_id);
+    const parsedAdults = Number(adults);
+    const parsedKids = Number(kids);
+    const parsedBabies = Number(babies);
 
     if (!Number.isInteger(parsedVisitorId) || parsedVisitorId <= 0) {
       return res.status(400).json({ message: 'visitor_id must be a valid positive number.' });
@@ -45,6 +51,10 @@ module.exports = function (db) {
 
     if (!Number.isInteger(parsedAccommodationId) || parsedAccommodationId <= 0) {
       return res.status(400).json({ message: 'accommodation_id must be a valid positive number.' });
+    }
+
+    if (!Number.isInteger(parsedAdults) || parsedAdults < 1 || !Number.isInteger(parsedKids) || parsedKids < 0 || !Number.isInteger(parsedBabies) || parsedBabies < 0) {
+      return res.status(400).json({ message: 'Guest counts are invalid. Adults must be at least 1, and kids/babies cannot be negative.' });
     }
 
     const effectiveCheckIn = check_in_date || booking_date;
@@ -79,7 +89,7 @@ module.exports = function (db) {
       }
 
       const [accommodations] = await db.query(
-        `SELECT id, title, status
+        `SELECT id, title, status, max_guests, max_adults, max_kids, max_babies
          FROM accommodations
          WHERE id = ? AND property_id IS NOT NULL AND status = 'approved'
          LIMIT 1`,
@@ -88,6 +98,29 @@ module.exports = function (db) {
 
       if (!accommodations.length) {
         return res.status(404).json({ message: 'Accommodation not found or not available for booking.' });
+      }
+
+      const accommodation = accommodations[0];
+      const hasMaxGuests = Number.isFinite(Number(accommodation.max_guests));
+      const hasMaxAdults = Number.isFinite(Number(accommodation.max_adults));
+      const hasMaxKids = Number.isFinite(Number(accommodation.max_kids));
+      const hasMaxBabies = Number.isFinite(Number(accommodation.max_babies));
+      const totalGuests = parsedAdults + parsedKids + parsedBabies;
+
+      if (hasMaxAdults && parsedAdults > Number(accommodation.max_adults)) {
+        return res.status(400).json({ message: `This accommodation allows a maximum of ${accommodation.max_adults} adults.` });
+      }
+
+      if (hasMaxKids && parsedKids > Number(accommodation.max_kids)) {
+        return res.status(400).json({ message: `This accommodation allows a maximum of ${accommodation.max_kids} kids.` });
+      }
+
+      if (hasMaxBabies && parsedBabies > Number(accommodation.max_babies)) {
+        return res.status(400).json({ message: `This accommodation allows a maximum of ${accommodation.max_babies} babies.` });
+      }
+
+      if (hasMaxGuests && totalGuests > Number(accommodation.max_guests)) {
+        return res.status(400).json({ message: `This accommodation allows up to ${accommodation.max_guests} total guests.` });
       }
 
       const [conflicts] = await db.query(
@@ -111,13 +144,13 @@ module.exports = function (db) {
       }
 
       const [result] = await db.query(
-        `INSERT INTO bookings (visitor_id, accommodation_id, booking_date, check_in_date, check_out_date, status)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [parsedVisitorId, parsedAccommodationId, effectiveCheckIn, effectiveCheckIn, effectiveCheckOut, status]
+        `INSERT INTO bookings (visitor_id, accommodation_id, booking_date, check_in_date, check_out_date, adults, kids, babies, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [parsedVisitorId, parsedAccommodationId, effectiveCheckIn, effectiveCheckIn, effectiveCheckOut, parsedAdults, parsedKids, parsedBabies, status]
       );
 
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url
          FROM bookings b
@@ -146,7 +179,7 @@ module.exports = function (db) {
 
     try {
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url
          FROM bookings b
@@ -179,7 +212,7 @@ module.exports = function (db) {
       const statusClause = requestedStatus === 'all' ? '' : 'AND b.status = ?';
       const params = requestedStatus === 'all' ? [parsedOwnerId] : [parsedOwnerId, requestedStatus];
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url,
                 v.name AS visitor_name, v.email AS visitor_email,
