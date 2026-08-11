@@ -18,6 +18,15 @@ module.exports = function (db) {
     return parsed.toISOString().slice(0, 10);
   }
 
+  function calculateNights(checkInValue, checkOutValue) {
+    const checkIn = new Date(checkInValue);
+    const checkOut = new Date(checkOutValue);
+    const utcCheckIn = Date.UTC(checkIn.getUTCFullYear(), checkIn.getUTCMonth(), checkIn.getUTCDate());
+    const utcCheckOut = Date.UTC(checkOut.getUTCFullYear(), checkOut.getUTCMonth(), checkOut.getUTCDate());
+    const diffDays = Math.floor((utcCheckOut - utcCheckIn) / (24 * 60 * 60 * 1000));
+    return Math.max(1, diffDays);
+  }
+
   router.post('/', async (req, res) => {
     const {
       visitor_id,
@@ -89,7 +98,7 @@ module.exports = function (db) {
       }
 
       const [accommodations] = await db.query(
-        `SELECT id, title, status, max_guests, max_adults, max_kids, max_babies
+        `SELECT id, title, status, price_per_night, max_guests, max_adults, max_kids, max_babies
          FROM accommodations
          WHERE id = ? AND property_id IS NOT NULL AND status = 'approved'
          LIMIT 1`,
@@ -101,6 +110,8 @@ module.exports = function (db) {
       }
 
       const accommodation = accommodations[0];
+      const nights = calculateNights(effectiveCheckIn, effectiveCheckOut);
+      const totalPrice = Number((Number(accommodation.price_per_night || 0) * nights).toFixed(2));
       const hasMaxGuests = Number.isFinite(Number(accommodation.max_guests));
       const hasMaxAdults = Number.isFinite(Number(accommodation.max_adults));
       const hasMaxKids = Number.isFinite(Number(accommodation.max_kids));
@@ -144,13 +155,13 @@ module.exports = function (db) {
       }
 
       const [result] = await db.query(
-        `INSERT INTO bookings (visitor_id, accommodation_id, booking_date, check_in_date, check_out_date, adults, kids, babies, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [parsedVisitorId, parsedAccommodationId, effectiveCheckIn, effectiveCheckIn, effectiveCheckOut, parsedAdults, parsedKids, parsedBabies, status]
+        `INSERT INTO bookings (visitor_id, accommodation_id, booking_date, check_in_date, check_out_date, adults, kids, babies, total_price, action, action_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
+        [parsedVisitorId, parsedAccommodationId, effectiveCheckIn, effectiveCheckIn, effectiveCheckOut, parsedAdults, parsedKids, parsedBabies, totalPrice, 'created', status]
       );
 
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url
          FROM bookings b
@@ -179,7 +190,7 @@ module.exports = function (db) {
 
     try {
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url
          FROM bookings b
@@ -212,7 +223,7 @@ module.exports = function (db) {
       const statusClause = requestedStatus === 'all' ? '' : 'AND b.status = ?';
       const params = requestedStatus === 'all' ? [parsedOwnerId] : [parsedOwnerId, requestedStatus];
       const [rows] = await db.query(
-        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.status,
+        `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
                 a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
                 COALESCE(a.image_url, parent.image_url) AS image_url,
                 v.name AS visitor_name, v.email AS visitor_email,
@@ -231,6 +242,67 @@ module.exports = function (db) {
     } catch (error) {
       console.error('Error loading owner booking requests:', error);
       return res.status(500).json({ message: 'Server error while fetching owner booking requests.' });
+    }
+  });
+
+  router.get('/owner/:ownerId/revenue/monthly', async (req, res) => {
+    const parsedOwnerId = Number(req.params.ownerId);
+    if (!Number.isInteger(parsedOwnerId) || parsedOwnerId <= 0) {
+      return res.status(400).json({ message: 'ownerId must be a valid positive number.' });
+    }
+
+    try {
+      const [rows] = await db.query(
+        `SELECT DATE_FORMAT(COALESCE(b.action_at, b.booking_date), '%Y-%m') AS report_month,
+                COALESCE(parent.id, a.id) AS property_id,
+                COALESCE(parent.title, a.title) AS property_title,
+                COUNT(*) AS total_bookings,
+                SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN 1 ELSE 0 END) AS confirmed_bookings,
+                SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_bookings,
+                SUM(CASE WHEN b.status = 'declined' THEN 1 ELSE 0 END) AS declined_bookings,
+                ROUND(SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN COALESCE(b.total_price, 0) ELSE 0 END), 2) AS revenue_total
+         FROM bookings b
+         INNER JOIN accommodations a ON a.id = b.accommodation_id
+         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         WHERE a.owner_id = ?
+         GROUP BY report_month, property_id, property_title
+         ORDER BY report_month DESC, property_title ASC`,
+        [parsedOwnerId]
+      );
+
+      return res.status(200).json(rows);
+    } catch (error) {
+      console.error('Error loading owner monthly revenue report:', error);
+      return res.status(500).json({ message: 'Server error while fetching owner monthly revenue report.' });
+    }
+  });
+
+  router.get('/revenue/monthly', async (_req, res) => {
+    try {
+      const [rows] = await db.query(
+        `SELECT DATE_FORMAT(COALESCE(b.action_at, b.booking_date), '%Y-%m') AS report_month,
+                COALESCE(parent.id, a.id) AS property_id,
+                COALESCE(parent.title, a.title) AS property_title,
+                a.owner_id,
+                u.name AS owner_name,
+                COUNT(*) AS total_bookings,
+                SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN 1 ELSE 0 END) AS confirmed_bookings,
+                SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_bookings,
+                SUM(CASE WHEN b.status = 'declined' THEN 1 ELSE 0 END) AS declined_bookings,
+                ROUND(SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN COALESCE(b.total_price, 0) ELSE 0 END), 2) AS revenue_total
+         FROM bookings b
+         INNER JOIN accommodations a ON a.id = b.accommodation_id
+         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN users u ON u.id = a.owner_id
+         GROUP BY report_month, property_id, property_title, a.owner_id, u.name
+         ORDER BY report_month DESC, revenue_total DESC`,
+        []
+      );
+
+      return res.status(200).json(rows);
+    } catch (error) {
+      console.error('Error loading global monthly revenue report:', error);
+      return res.status(500).json({ message: 'Server error while fetching monthly revenue report.' });
     }
   });
 
@@ -270,8 +342,8 @@ module.exports = function (db) {
       }
 
       await db.query(
-        'UPDATE bookings SET status = ? WHERE id = ?',
-        [nextStatus, parsedBookingId]
+        'UPDATE bookings SET status = ?, action = ?, action_at = NOW() WHERE id = ?',
+        [nextStatus, nextStatus === 'confirmed' ? 'owner_confirmed' : 'owner_declined', parsedBookingId]
       );
 
       return res.status(200).json({ message: `Booking ${nextStatus}.` });
@@ -324,8 +396,8 @@ module.exports = function (db) {
       }
 
       await db.query(
-        'UPDATE bookings SET status = ? WHERE id = ?',
-        ['cancelled', parsedBookingId]
+        'UPDATE bookings SET status = ?, action = ?, action_at = NOW() WHERE id = ?',
+        ['cancelled', 'visitor_cancelled', parsedBookingId]
       );
 
       return res.status(200).json({ message: 'Booking cancelled successfully.' });

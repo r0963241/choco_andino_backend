@@ -86,7 +86,10 @@ async function ensureBookingSchema() {
         { name: 'check_out_date', definition: 'DATE NULL' },
         { name: 'adults', definition: 'INT NULL DEFAULT 1' },
         { name: 'kids', definition: 'INT NULL DEFAULT 0' },
-        { name: 'babies', definition: 'INT NULL DEFAULT 0' }
+        { name: 'babies', definition: 'INT NULL DEFAULT 0' },
+        { name: 'total_price', definition: 'DECIMAL(10,2) NULL DEFAULT 0' },
+        { name: 'action', definition: 'VARCHAR(50) NULL' },
+        { name: 'action_at', definition: 'DATETIME NULL' }
     ];
 
     for (const column of requiredColumns) {
@@ -106,6 +109,39 @@ async function ensureBookingSchema() {
     }
 }
 
+async function backfillBookingReportingFields() {
+    // Populate missing totals from dates and accommodation nightly price.
+    await db.query(
+        `UPDATE bookings b
+         LEFT JOIN accommodations a ON a.id = b.accommodation_id
+         SET b.total_price = COALESCE(
+             ROUND(COALESCE(a.price_per_night, 0) * GREATEST(DATEDIFF(b.check_out_date, b.check_in_date), 1), 2),
+             0
+         )
+         WHERE b.total_price IS NULL
+            OR b.total_price = 0`
+    );
+
+    // Populate missing action values from status so older rows can be reported.
+    await db.query(
+        `UPDATE bookings
+         SET action = CASE
+             WHEN status = 'confirmed' THEN 'owner_confirmed'
+             WHEN status = 'declined' THEN 'owner_declined'
+             WHEN status = 'cancelled' THEN 'visitor_cancelled'
+             ELSE 'created'
+         END
+         WHERE action IS NULL OR action = ''`
+    );
+
+    // If action exists but timestamp is missing, default to booking creation date.
+    await db.query(
+        `UPDATE bookings
+         SET action_at = booking_date
+         WHERE action_at IS NULL`
+    );
+}
+
 // 4. ROUTE MOUNTING
 const authRoutes = require('./routes/auth.js')(db);
 const accommodationRoutes = require('./routes/accommodations.js')(db);
@@ -113,18 +149,6 @@ const bookingRoutes = require('./routes/bookings.js')(db);
 app.use('/api/auth', authRoutes);
 app.use('/api/accommodations', accommodationRoutes);
 app.use('/api/bookings', bookingRoutes);
-// Test the database connection instantly when starting the server
-db.getConnection()
-    .then(async (connection) => {
-        connection.release();
-        console.log('Successfully connected to the Chocó Andino MySQL database!');
-        await ensureAccommodationSchema();
-        await ensureBookingSchema();
-    })
-    .catch((err) => {
-        console.error('Database connection failed! Error details:', err.message);
-        console.log('TIP: Check if  XAMPP MySQL is active and my password in .env is correct.');
-    });
 
 app.post('/api/upload-image', upload.single('image'), (req, res) => {
     if (!req.file) {
@@ -160,6 +184,26 @@ app.get('/api/accommodations', async (req, res) => {
 
 // 6. START THE SERVER ON MY LOCAL MACHINE
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Express Backend Server running locally at: http://localhost:${PORT}`);
-});
+
+async function startServer() {
+    try {
+        const connection = await db.getConnection();
+        connection.release();
+        console.log('Successfully connected to the Chocó Andino MySQL database!');
+
+        // Ensure schema upgrades complete before any request can hit routes.
+        await ensureAccommodationSchema();
+        await ensureBookingSchema();
+        await backfillBookingReportingFields();
+
+        app.listen(PORT, () => {
+            console.log(`Express Backend Server running locally at: http://localhost:${PORT}`);
+        });
+    } catch (err) {
+        console.error('Database connection failed! Error details:', err.message);
+        console.log('TIP: Check if  XAMPP MySQL is active and my password in .env is correct.');
+        process.exit(1);
+    }
+}
+
+startServer();
