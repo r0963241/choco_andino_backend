@@ -138,7 +138,7 @@ app.get('/api/accommodations', async (req, res) => {
     try {
         // Query the database safely
         const [rows] = await db.query(
-            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, accommodation_type, bed_type, max_guests FROM accommodations WHERE status = 'approved' AND price_per_night > 0"
+            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, accommodation_type, bed_type, max_guests FROM accommodations WHERE status = 'approved' AND property_id IS NOT NULL AND price_per_night > 0"
         );
 
         const accommodationsWithImage = rows.map((cabin) => ({
