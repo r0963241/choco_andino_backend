@@ -7,12 +7,37 @@ const jwt = require('jsonwebtoken');
 module.exports = function(db) {
 
     // 1. REGISTER ENDPOINT (POST /api/auth/register)
+    function isAtLeast18(dateOfBirthValue) {
+        if (!dateOfBirthValue) {
+            return false;
+        }
+
+        const birthDate = new Date(dateOfBirthValue);
+        if (Number.isNaN(birthDate.getTime())) {
+            return false;
+        }
+
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const monthDifference = today.getMonth() - birthDate.getMonth();
+
+        if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < birthDate.getDate())) {
+            age -= 1;
+        }
+
+        return age >= 18;
+    }
+
     router.post('/register', async (req, res) => {
-        const { name, email, password, role } = req.body;
+        const { name, email, password, role, date_of_birth } = req.body;
 
         // Basic input validation checks
-        if (!name || !email || !password) {
-            return res.status(400).json({ message: 'All fields are required.' });
+        if (!name || !email || !password || !date_of_birth) {
+            return res.status(400).json({ message: 'Name, email, password, and date of birth are required.' });
+        }
+
+        if (!isAtLeast18(date_of_birth)) {
+            return res.status(400).json({ message: 'You must be at least 18 years old to register.' });
         }
 
         try {
@@ -30,8 +55,8 @@ module.exports = function(db) {
 
             // Save the new user to the MySQL database
             await db.query(
-                'INSERT INTO users (name, email, password, role, is_active) VALUES (?, ?, ?, ?, 1)',
-                [name, email, hashedPassword, userRole]
+                'INSERT INTO users (name, email, password, role, date_of_birth, is_active) VALUES (?, ?, ?, ?, ?, 1)',
+                [name, email, hashedPassword, userRole, date_of_birth]
             );
 
             res.status(201).json({ message: 'User registered successfully!' });

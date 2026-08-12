@@ -49,7 +49,8 @@ const db = mysql.createPool({
 async function ensureUserSchema() {
     const requiredColumns = [
         { name: 'profile_photo', definition: 'VARCHAR(255) NULL DEFAULT NULL' },
-        { name: 'is_active', definition: 'TINYINT(1) NOT NULL DEFAULT 1' }
+        { name: 'is_active', definition: 'TINYINT(1) NOT NULL DEFAULT 1' },
+        { name: 'date_of_birth', definition: 'DATE NULL DEFAULT NULL' }
     ];
 
     for (const column of requiredColumns) {
