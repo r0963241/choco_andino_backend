@@ -46,6 +46,29 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
+async function ensureUserSchema() {
+    const requiredColumns = [
+        { name: 'profile_photo', definition: 'VARCHAR(255) NULL DEFAULT NULL' },
+        { name: 'is_active', definition: 'TINYINT(1) NOT NULL DEFAULT 1' }
+    ];
+
+    for (const column of requiredColumns) {
+        const [existingColumns] = await db.query(
+            `SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = 'users'
+               AND COLUMN_NAME = ?`,
+            [column.name]
+        );
+
+        if (!existingColumns.length) {
+            await db.query(`ALTER TABLE users ADD COLUMN ${column.name} ${column.definition}`);
+            console.log(`Added missing users.${column.name} column.`);
+        }
+    }
+}
+
 async function ensureAccommodationSchema() {
     const requiredColumns = [
         { name: 'property_id', definition: 'INT NULL' },
@@ -269,6 +292,7 @@ async function startServer() {
         console.log('Successfully connected to the Chocó Andino MySQL database!');
 
         // Ensure schema upgrades complete before any request can hit routes.
+        await ensureUserSchema();
         await ensureAccommodationSchema();
         await ensureBookingSchema();
         await backfillBookingReportingFields();

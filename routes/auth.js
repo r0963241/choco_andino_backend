@@ -30,7 +30,7 @@ module.exports = function(db) {
 
             // Save the new user to the MySQL database
             await db.query(
-                'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+                'INSERT INTO users (name, email, password, role, is_active) VALUES (?, ?, ?, ?, 1)',
                 [name, email, hashedPassword, userRole]
             );
 
@@ -50,9 +50,13 @@ module.exports = function(db) {
 
         try {
             // Find the user by their email
-            const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+            const [users] = await db.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
             if (users.length === 0) {
                 return res.status(401).json({ message: 'Invalid credentials.' });
+            }
+
+            if (Number(users[0].is_active) === 0) {
+                return res.status(401).json({ message: 'Account deleted. Contact admin to re-open it.' });
             }
 
             const user = users[0];
@@ -67,7 +71,8 @@ module.exports = function(db) {
             const payload = {
                 id: user.id,
                 name: user.name,
-                role: user.role
+                role: user.role,
+                profile_photo: user.profile_photo || null
             };
 
             // Sign the token using the hidden secret key. It expires in 2 hours.
@@ -77,11 +82,129 @@ module.exports = function(db) {
             res.status(200).json({
                 message: 'Login successful!',
                 token: token,
-                user: { id: user.id, name: user.name, role: user.role }
+                user: {
+                    id: user.id,
+                    name: user.name,
+                    role: user.role,
+                    email: user.email,
+                    profile_photo: user.profile_photo || null
+                }
             });
         } catch (error) {
             console.error('Login error:', error);
             res.status(500).json({ message: 'Server error during login.' });
+        }
+    });
+
+    router.get('/user/:userId', async (req, res) => {
+        const parsedUserId = Number(req.params.userId);
+
+        if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+            return res.status(400).json({ message: 'userId must be a valid positive number.' });
+        }
+
+        try {
+            const [users] = await db.query(
+                'SELECT id, name, email, role, profile_photo FROM users WHERE id = ? LIMIT 1',
+                [parsedUserId]
+            );
+
+            if (!users.length) {
+                return res.status(404).json({ message: 'User not found.' });
+            }
+
+            return res.status(200).json(users[0]);
+        } catch (error) {
+            console.error('Error fetching user profile:', error);
+            return res.status(500).json({ message: 'Server error while fetching user profile.' });
+        }
+    });
+
+    router.patch('/user/:userId', async (req, res) => {
+        const parsedUserId = Number(req.params.userId);
+        const { name, password, profile_photo } = req.body;
+
+        if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+            return res.status(400).json({ message: 'userId must be a valid positive number.' });
+        }
+
+        const updates = [];
+        const values = [];
+
+        if (name && typeof name === 'string' && name.trim()) {
+            updates.push('name = ?');
+            values.push(name.trim());
+        }
+
+        if (typeof profile_photo === 'string' && profile_photo.trim()) {
+            updates.push('profile_photo = ?');
+            values.push(profile_photo.trim());
+        }
+
+        if (password && typeof password === 'string' && password.trim()) {
+            const hashedPassword = await bcrypt.hash(password.trim(), 10);
+            updates.push('password = ?');
+            values.push(hashedPassword);
+        }
+
+        if (!updates.length) {
+            return res.status(400).json({ message: 'No profile changes were provided.' });
+        }
+
+        try {
+            values.push(parsedUserId);
+            await db.query(
+                `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+                values
+            );
+
+            const [users] = await db.query(
+                'SELECT id, name, email, role, profile_photo FROM users WHERE id = ? LIMIT 1',
+                [parsedUserId]
+            );
+
+            return res.status(200).json({
+                message: 'Profile updated successfully.',
+                user: users[0]
+            });
+        } catch (error) {
+            console.error('Error updating user profile:', error);
+            return res.status(500).json({ message: 'Server error while updating profile.' });
+        }
+    });
+
+    router.delete('/user/:userId', async (req, res) => {
+        const parsedUserId = Number(req.params.userId);
+        const { password } = req.body || {};
+
+        if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
+            return res.status(400).json({ message: 'userId must be a valid positive number.' });
+        }
+
+        if (!password || typeof password !== 'string' || !password.trim()) {
+            return res.status(400).json({ message: 'Password confirmation is required to deactivate your account.' });
+        }
+
+        try {
+            const [users] = await db.query('SELECT id, password, is_active FROM users WHERE id = ? LIMIT 1', [parsedUserId]);
+            if (!users.length) {
+                return res.status(404).json({ message: 'User not found.' });
+            }
+
+            if (Number(users[0].is_active) === 0) {
+                return res.status(409).json({ message: 'This account is already inactive.' });
+            }
+
+            const isMatch = await bcrypt.compare(password.trim(), users[0].password);
+            if (!isMatch) {
+                return res.status(401).json({ message: 'Incorrect password. Account was not deactivated.' });
+            }
+
+            await db.query('UPDATE users SET is_active = 0 WHERE id = ?', [parsedUserId]);
+            return res.status(200).json({ message: 'Account deleted. Contact admin to re-open it.' });
+        } catch (error) {
+            console.error('Error deactivating user account:', error);
+            return res.status(500).json({ message: 'Server error while deactivating account.' });
         }
     });
 
