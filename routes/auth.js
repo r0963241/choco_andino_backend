@@ -112,7 +112,8 @@ module.exports = function(db) {
                     name: user.name,
                     role: user.role,
                     email: user.email,
-                    profile_photo: user.profile_photo || null
+                    profile_photo: user.profile_photo || null,
+                    date_of_birth: user.date_of_birth || null
                 }
             });
         } catch (error) {
@@ -147,7 +148,7 @@ module.exports = function(db) {
 
     router.patch('/user/:userId', async (req, res) => {
         const parsedUserId = Number(req.params.userId);
-        const { name, password, profile_photo } = req.body;
+        const { name, password, profile_photo, date_of_birth } = req.body;
 
         if (!Number.isInteger(parsedUserId) || parsedUserId <= 0) {
             return res.status(400).json({ message: 'userId must be a valid positive number.' });
@@ -164,6 +165,28 @@ module.exports = function(db) {
         if (typeof profile_photo === 'string' && profile_photo.trim()) {
             updates.push('profile_photo = ?');
             values.push(profile_photo.trim());
+        }
+
+        if (typeof date_of_birth !== 'undefined' && date_of_birth !== null && date_of_birth !== '') {
+            const birthDate = new Date(date_of_birth);
+            if (Number.isNaN(birthDate.getTime())) {
+                return res.status(400).json({ message: 'Date of birth must be a valid date.' });
+            }
+
+            const today = new Date();
+            let age = today.getFullYear() - birthDate.getFullYear();
+            const monthDifference = today.getMonth() - birthDate.getMonth();
+
+            if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < birthDate.getDate())) {
+                age -= 1;
+            }
+
+            if (age < 18) {
+                return res.status(400).json({ message: 'You must be at least 18 years old.' });
+            }
+
+            updates.push('date_of_birth = ?');
+            values.push(date_of_birth);
         }
 
         if (password && typeof password === 'string' && password.trim()) {
@@ -184,7 +207,7 @@ module.exports = function(db) {
             );
 
             const [users] = await db.query(
-                'SELECT id, name, email, role, profile_photo FROM users WHERE id = ? LIMIT 1',
+                'SELECT id, name, email, role, profile_photo, date_of_birth FROM users WHERE id = ? LIMIT 1',
                 [parsedUserId]
             );
 
