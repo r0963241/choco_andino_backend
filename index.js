@@ -3,6 +3,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const multer = require('multer');
+const cron = require('node-cron');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config(); // Loads variables from your hidden .env file
@@ -142,6 +143,82 @@ async function backfillBookingReportingFields() {
     );
 }
 
+let autoCompleteJobRunning = false;
+
+async function sendAutomationWebhook(eventType, payload) {
+    const webhookUrl = process.env.AUTOMATION_WEBHOOK_URL;
+    if (!webhookUrl || typeof fetch !== 'function') {
+        return;
+    }
+
+    try {
+        const response = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                event_type: eventType,
+                source: 'choco_andino_backend',
+                occurred_at: new Date().toISOString(),
+                payload
+            })
+        });
+
+        if (!response.ok) {
+            console.error(`Automation webhook failed with status ${response.status} for event ${eventType}.`);
+        }
+    } catch (error) {
+        console.error(`Automation webhook error for event ${eventType}:`, error.message);
+    }
+}
+
+async function autoCompletePastBookings() {
+    if (autoCompleteJobRunning) {
+        return;
+    }
+
+    autoCompleteJobRunning = true;
+    try {
+        const [rows] = await db.query(
+            `SELECT id
+             FROM bookings
+             WHERE status = 'confirmed'
+               AND DATE(COALESCE(check_out_date, DATE_ADD(COALESCE(check_in_date, booking_date), INTERVAL 1 DAY))) < CURDATE()
+             LIMIT 500`
+        );
+
+        if (!rows.length) {
+            return;
+        }
+
+        const bookingIds = rows.map((row) => row.id);
+        await db.query(
+            `UPDATE bookings
+             SET status = 'completed', action = 'system_auto_completed', action_at = NOW()
+             WHERE id IN (?)`,
+            [bookingIds]
+        );
+
+        console.log(`Automation job completed ${bookingIds.length} booking(s).`);
+        await sendAutomationWebhook('bookings_auto_completed', {
+            booking_ids: bookingIds,
+            count: bookingIds.length
+        });
+    } catch (error) {
+        console.error('Error running auto-complete booking automation job:', error.message);
+    } finally {
+        autoCompleteJobRunning = false;
+    }
+}
+
+function scheduleBookingAutomationJobs() {
+    // Every hour at minute 0.
+    cron.schedule('0 * * * *', () => {
+        autoCompletePastBookings();
+    });
+}
+
 // 4. ROUTE MOUNTING
 const authRoutes = require('./routes/auth.js')(db);
 const accommodationRoutes = require('./routes/accommodations.js')(db);
@@ -195,6 +272,8 @@ async function startServer() {
         await ensureAccommodationSchema();
         await ensureBookingSchema();
         await backfillBookingReportingFields();
+        await autoCompletePastBookings();
+        scheduleBookingAutomationJobs();
 
         app.listen(PORT, () => {
             console.log(`Express Backend Server running locally at: http://localhost:${PORT}`);

@@ -1,0 +1,134 @@
+{
+  "name": "Choco Andino Booking Events",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "choco-andino-booking-events",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "Webhook_Trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "replace-with-generated-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"event_type\"]}}",
+              "operation": "equal",
+              "value2": "booking_status_updated"
+            },
+            {
+              "value1": "={{$json[\"payload\"][\"status\"]}}",
+              "operation": "equal",
+              "value2": "confirmed"
+            }
+          ]
+        }
+      },
+      "id": "Only_Confirmed",
+      "name": "Only Confirmed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "message",
+              "name": "message",
+              "type": "string",
+              "value": "=Booking #{{$json[\"payload\"][\"booking_id\"]}} was confirmed by owner #{{$json[\"payload\"][\"owner_id\"]}}."
+            },
+            {
+              "id": "occurred",
+              "name": "occurred",
+              "type": "string",
+              "value": "={{$json[\"occurred_at\"]}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "Build_Notification",
+      "name": "Build Notification",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        800,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://webhook.site/replace-this-url",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"source\": \"n8n\",\n  \"message\": $json.message,\n  \"occurred_at\": $json.occurred\n}",
+        "options": {}
+      },
+      "id": "Send_Notification",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1080,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Only Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only Confirmed": {
+      "main": [
+        [
+          {
+            "node": "Build Notification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Notification": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

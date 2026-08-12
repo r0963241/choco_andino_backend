@@ -5,6 +5,34 @@ module.exports = function (db) {
   const validStatuses = ['pending', 'confirmed', 'cancelled', 'declined', 'completed'];
   const ownerModerationStatuses = ['confirmed', 'declined'];
 
+  async function sendAutomationWebhook(eventType, payload) {
+    const webhookUrl = process.env.AUTOMATION_WEBHOOK_URL;
+    if (!webhookUrl || typeof fetch !== 'function') {
+      return;
+    }
+
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          event_type: eventType,
+          source: 'choco_andino_backend',
+          occurred_at: new Date().toISOString(),
+          payload
+        })
+      });
+
+      if (!response.ok) {
+        console.error(`Automation webhook failed with status ${response.status} for event ${eventType}.`);
+      }
+    } catch (error) {
+      console.error(`Automation webhook error for event ${eventType}:`, error.message);
+    }
+  }
+
   function formatDateForMessage(value) {
     if (!value) {
       return 'unknown date';
@@ -25,6 +53,104 @@ module.exports = function (db) {
     const utcCheckOut = Date.UTC(checkOut.getUTCFullYear(), checkOut.getUTCMonth(), checkOut.getUTCDate());
     const diffDays = Math.floor((utcCheckOut - utcCheckIn) / (24 * 60 * 60 * 1000));
     return Math.max(1, diffDays);
+  }
+
+  function getDominantStayMonth(checkInValue, checkOutValue) {
+    const effectiveCheckIn = checkInValue || null;
+    const effectiveCheckOut = checkOutValue || effectiveCheckIn;
+
+    if (!effectiveCheckIn) {
+      return null;
+    }
+
+    const startDate = new Date(effectiveCheckIn);
+    if (Number.isNaN(startDate.getTime())) {
+      return null;
+    }
+
+    const endDate = new Date(effectiveCheckOut);
+    if (Number.isNaN(endDate.getTime())) {
+      return `${startDate.getUTCFullYear()}-${String(startDate.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    const startUtc = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
+    const endUtc = new Date(Date.UTC(endDate.getUTCFullYear(), endDate.getUTCMonth(), endDate.getUTCDate()));
+
+    if (endUtc <= startUtc) {
+      return `${startUtc.getUTCFullYear()}-${String(startUtc.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+
+    const monthNights = new Map();
+    const cursor = new Date(startUtc);
+
+    while (cursor < endUtc) {
+      const monthKey = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`;
+      monthNights.set(monthKey, (monthNights.get(monthKey) || 0) + 1);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    let dominantMonth = null;
+    let maxNights = -1;
+
+    for (const [monthKey, nights] of monthNights.entries()) {
+      if (nights > maxNights) {
+        dominantMonth = monthKey;
+        maxNights = nights;
+      }
+    }
+
+    return dominantMonth || `${startUtc.getUTCFullYear()}-${String(startUtc.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
+  function buildMonthlyRevenueReport(rows) {
+    const reportMap = new Map();
+
+    for (const row of rows) {
+      const propertyId = Number(row.property_id || row.accommodation_id || 0);
+      const propertyTitle = row.property_title || row.accommodation_title || `Property #${propertyId}`;
+      const reportMonth = getDominantStayMonth(row.check_in_date || row.booking_date, row.check_out_date);
+
+      if (!reportMonth) {
+        continue;
+      }
+
+      const key = `${reportMonth}|${propertyId}|${propertyTitle}`;
+
+      if (!reportMap.has(key)) {
+        reportMap.set(key, {
+          report_month: reportMonth,
+          property_id: propertyId,
+          property_title: propertyTitle,
+          total_bookings: 0,
+          confirmed_bookings: 0,
+          cancelled_bookings: 0,
+          declined_bookings: 0,
+          revenue_total: 0
+        });
+      }
+
+      const bucket = reportMap.get(key);
+      bucket.total_bookings += 1;
+
+      if (row.status === 'cancelled') {
+        bucket.cancelled_bookings += 1;
+      } else if (row.status === 'declined') {
+        bucket.declined_bookings += 1;
+      }
+
+      if (row.status === 'confirmed' || row.status === 'completed') {
+        bucket.confirmed_bookings += 1;
+        bucket.revenue_total += Number(row.total_price || 0);
+      }
+    }
+
+    return Array.from(reportMap.values()).sort((a, b) => {
+      if (b.report_month !== a.report_month) {
+        return b.report_month.localeCompare(a.report_month);
+      }
+
+      return String(a.property_title).localeCompare(String(b.property_title));
+    });
   }
 
   router.post('/', async (req, res) => {
@@ -172,6 +298,16 @@ module.exports = function (db) {
         [result.insertId]
       );
 
+      sendAutomationWebhook('booking_created', {
+        booking_id: result.insertId,
+        visitor_id: parsedVisitorId,
+        accommodation_id: parsedAccommodationId,
+        check_in_date: effectiveCheckIn,
+        check_out_date: effectiveCheckOut,
+        total_price: totalPrice,
+        status
+      });
+
       return res.status(201).json({
         message: 'Booking saved successfully.',
         booking: rows[0]
@@ -253,24 +389,19 @@ module.exports = function (db) {
 
     try {
       const [rows] = await db.query(
-        `SELECT DATE_FORMAT(COALESCE(b.action_at, b.booking_date), '%Y-%m') AS report_month,
+        `SELECT b.id, b.status, b.booking_date, b.check_in_date, b.check_out_date, b.total_price,
                 COALESCE(parent.id, a.id) AS property_id,
                 COALESCE(parent.title, a.title) AS property_title,
-                COUNT(*) AS total_bookings,
-                SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN 1 ELSE 0 END) AS confirmed_bookings,
-                SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_bookings,
-                SUM(CASE WHEN b.status = 'declined' THEN 1 ELSE 0 END) AS declined_bookings,
-                ROUND(SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN COALESCE(b.total_price, 0) ELSE 0 END), 2) AS revenue_total
+                a.title AS accommodation_title
          FROM bookings b
          INNER JOIN accommodations a ON a.id = b.accommodation_id
          LEFT JOIN accommodations parent ON parent.id = a.property_id
          WHERE a.owner_id = ?
-         GROUP BY report_month, property_id, property_title
-         ORDER BY report_month DESC, property_title ASC`,
+         ORDER BY COALESCE(b.check_in_date, b.booking_date) DESC, b.id DESC`,
         [parsedOwnerId]
       );
 
-      return res.status(200).json(rows);
+      return res.status(200).json(buildMonthlyRevenueReport(rows));
     } catch (error) {
       console.error('Error loading owner monthly revenue report:', error);
       return res.status(500).json({ message: 'Server error while fetching owner monthly revenue report.' });
@@ -280,26 +411,21 @@ module.exports = function (db) {
   router.get('/revenue/monthly', async (_req, res) => {
     try {
       const [rows] = await db.query(
-        `SELECT DATE_FORMAT(COALESCE(b.action_at, b.booking_date), '%Y-%m') AS report_month,
+        `SELECT b.id, b.status, b.booking_date, b.check_in_date, b.check_out_date, b.total_price,
                 COALESCE(parent.id, a.id) AS property_id,
                 COALESCE(parent.title, a.title) AS property_title,
                 a.owner_id,
                 u.name AS owner_name,
-                COUNT(*) AS total_bookings,
-                SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN 1 ELSE 0 END) AS confirmed_bookings,
-                SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_bookings,
-                SUM(CASE WHEN b.status = 'declined' THEN 1 ELSE 0 END) AS declined_bookings,
-                ROUND(SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN COALESCE(b.total_price, 0) ELSE 0 END), 2) AS revenue_total
+                a.title AS accommodation_title
          FROM bookings b
          INNER JOIN accommodations a ON a.id = b.accommodation_id
          LEFT JOIN accommodations parent ON parent.id = a.property_id
          LEFT JOIN users u ON u.id = a.owner_id
-         GROUP BY report_month, property_id, property_title, a.owner_id, u.name
-         ORDER BY report_month DESC, revenue_total DESC`,
+         ORDER BY COALESCE(b.check_in_date, b.booking_date) DESC, b.id DESC`,
         []
       );
 
-      return res.status(200).json(rows);
+      return res.status(200).json(buildMonthlyRevenueReport(rows));
     } catch (error) {
       console.error('Error loading global monthly revenue report:', error);
       return res.status(500).json({ message: 'Server error while fetching monthly revenue report.' });
@@ -345,6 +471,13 @@ module.exports = function (db) {
         'UPDATE bookings SET status = ?, action = ?, action_at = NOW() WHERE id = ?',
         [nextStatus, nextStatus === 'confirmed' ? 'owner_confirmed' : 'owner_declined', parsedBookingId]
       );
+
+      sendAutomationWebhook('booking_status_updated', {
+        booking_id: parsedBookingId,
+        owner_id: parsedOwnerId,
+        status: nextStatus,
+        action: nextStatus === 'confirmed' ? 'owner_confirmed' : 'owner_declined'
+      });
 
       return res.status(200).json({ message: `Booking ${nextStatus}.` });
     } catch (error) {
@@ -399,6 +532,13 @@ module.exports = function (db) {
         'UPDATE bookings SET status = ?, action = ?, action_at = NOW() WHERE id = ?',
         ['cancelled', 'visitor_cancelled', parsedBookingId]
       );
+
+      sendAutomationWebhook('booking_cancelled', {
+        booking_id: parsedBookingId,
+        visitor_id: parsedVisitorId,
+        status: 'cancelled',
+        action: 'visitor_cancelled'
+      });
 
       return res.status(200).json({ message: 'Booking cancelled successfully.' });
     } catch (error) {
