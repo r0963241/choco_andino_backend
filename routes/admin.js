@@ -30,6 +30,7 @@ module.exports = function (db) {
       const [rows] = await db.query(
         `SELECT id, name, email, role, is_active, date_of_birth, profile_photo
          FROM users
+         WHERE NOT (name LIKE 'Deleted User %' OR email LIKE 'deleted-%')
          ORDER BY id DESC`
       );
 
@@ -84,6 +85,10 @@ module.exports = function (db) {
       return res.status(400).json({ message: 'userId must be a valid positive number.' });
     }
 
+    if (userId === 10) {
+      return res.status(403).json({ message: 'The primary admin account cannot be disabled or deleted.' });
+    }
+
     if (is_active !== 0 && is_active !== 1) {
       return res.status(400).json({ message: 'is_active must be 0 or 1.' });
     }
@@ -113,6 +118,10 @@ module.exports = function (db) {
 
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ message: 'userId must be a valid positive number.' });
+    }
+
+    if (userId === 10) {
+      return res.status(403).json({ message: 'The primary admin account cannot be disabled or deleted.' });
     }
 
     try {
@@ -157,6 +166,56 @@ module.exports = function (db) {
     } catch (error) {
       console.error('Admin delete user error:', error);
       return res.status(500).json({ message: 'Server error while removing user account.' });
+    }
+  });
+
+  router.delete('/users/:userId/force-admin-hard-delete', requireAdmin, async (req, res) => {
+    const actingAdminId = Number(req.user?.id);
+    const targetUserId = Number(req.params.userId);
+
+    if (!Number.isInteger(actingAdminId) || actingAdminId <= 0) {
+      return res.status(403).json({ message: 'Primary admin identity is missing.' });
+    }
+
+    if (actingAdminId !== 10) {
+      return res.status(403).json({ message: 'Only the primary admin (ID 10) can use this emergency override.' });
+    }
+
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+      return res.status(400).json({ message: 'Target userId must be a valid positive number.' });
+    }
+
+    if (targetUserId === 10) {
+      return res.status(403).json({ message: 'The primary admin account cannot be hard deleted.' });
+    }
+
+    try {
+      const [users] = await db.query(
+        'SELECT id, role, name, email FROM users WHERE id = ? LIMIT 1',
+        [targetUserId]
+      );
+
+      if (!users.length) {
+        return res.status(404).json({ message: 'Target admin user not found.' });
+      }
+
+      if (String(users[0].role || '').trim().toLowerCase() !== 'admin') {
+        return res.status(400).json({ message: 'This emergency hard-delete route is only for admin accounts.' });
+      }
+
+      await db.query('DELETE FROM users WHERE id = ?', [targetUserId]);
+
+      return res.status(200).json({
+        message: 'Undesirable admin account was hard deleted by the primary admin.',
+        deletedUser: {
+          id: users[0].id,
+          name: users[0].name,
+          email: users[0].email
+        }
+      });
+    } catch (error) {
+      console.error('Primary admin force delete error:', error);
+      return res.status(500).json({ message: 'Server error while hard deleting the admin profile.' });
     }
   });
 
