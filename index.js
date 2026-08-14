@@ -247,16 +247,18 @@ function scheduleBookingAutomationJobs() {
 const authRoutes = require('./routes/auth.js')(db);
 const accommodationRoutes = require('./routes/accommodations.js')(db);
 const bookingRoutes = require('./routes/bookings.js')(db);
+const adminRoutes = require('./routes/admin.js')(db);
 app.use('/api/auth', authRoutes);
 app.use('/api/accommodations', accommodationRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.post('/api/upload-image', upload.single('image'), (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: 'No image file provided.' });
     }
 
-    const imageUrl = `/uploads/${req.file.filename}`;
+    const imageUrl = `http://localhost:3000/uploads/${req.file.filename}`;
     res.status(200).json({ imageUrl });
 });
 
