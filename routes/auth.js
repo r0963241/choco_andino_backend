@@ -50,8 +50,10 @@ module.exports = function(db) {
             // Securely hash the password (scramble it 10 times)
             const hashedPassword = await bcrypt.hash(password, 10);
 
-            // Assign default role as 'visitor' if none or an invalid one is specified
-            const userRole = (role === 'owner' || role === 'admin') ? role : 'visitor';
+            const normalizedRoleInput = String(role || '').trim().toLowerCase();
+            const userRole = normalizedRoleInput === 'owner' || normalizedRoleInput === 'admin'
+                ? normalizedRoleInput
+                : 'visitor';
 
             // Save the new user to the MySQL database
             await db.query(
@@ -85,6 +87,7 @@ module.exports = function(db) {
             }
 
             const user = users[0];
+            const normalizedRole = String(user.role || 'visitor').trim().toLowerCase();
 
             // Compare the typed password with the scrambled database password
             const isMatch = await bcrypt.compare(password, user.password);
@@ -96,7 +99,7 @@ module.exports = function(db) {
             const payload = {
                 id: user.id,
                 name: user.name,
-                role: user.role,
+                role: normalizedRole,
                 profile_photo: user.profile_photo || null
             };
 
@@ -110,7 +113,7 @@ module.exports = function(db) {
                 user: {
                     id: user.id,
                     name: user.name,
-                    role: user.role,
+                    role: normalizedRole,
                     email: user.email,
                     profile_photo: user.profile_photo || null,
                     date_of_birth: user.date_of_birth || null
