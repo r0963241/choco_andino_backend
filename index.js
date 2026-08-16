@@ -70,6 +70,41 @@ async function ensureUserSchema() {
     }
 }
 
+async function ensurePropertiesSchema() {
+    const [tableExists] = await db.query(
+        `SELECT TABLE_NAME
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'properties'`
+    );
+
+    if (!tableExists.length) {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS properties (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              owner_id INT NULL,
+              title VARCHAR(255) NOT NULL,
+              address VARCHAR(255) NULL,
+              property_type VARCHAR(50) NOT NULL,
+              unit_count INT NOT NULL DEFAULT 0,
+              location VARCHAR(255) NOT NULL,
+              description TEXT NOT NULL,
+              has_ac TINYINT(1) DEFAULT 0,
+              has_parking TINYINT(1) DEFAULT 0,
+              has_room_service TINYINT(1) DEFAULT 0,
+              has_private_wc TINYINT(1) DEFAULT 0,
+              image_url VARCHAR(500) NULL,
+              status VARCHAR(50) DEFAULT 'pending',
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              CONSTRAINT fk_properties_owner
+                FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        `);
+        console.log('Created missing properties table.');
+    }
+}
+
 async function ensureAccommodationSchema() {
     const requiredColumns = [
         { name: 'property_id', definition: 'INT NULL' },
@@ -296,6 +331,7 @@ async function startServer() {
 
         // Ensure schema upgrades complete before any request can hit routes.
         await ensureUserSchema();
+        await ensurePropertiesSchema();
         await ensureAccommodationSchema();
         await ensureBookingSchema();
         await backfillBookingReportingFields();

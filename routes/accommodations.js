@@ -123,22 +123,73 @@ module.exports = function (db) {
         }
       }
 
-      const [result] = await db.query(
-        `INSERT INTO accommodations (owner_id, property_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [owner_id || null, title, description, 0, location, address, property_type, totalUnits, has_ac ? 1 : 0, has_parking ? 1 : 0, has_room_service ? 1 : 0, has_private_wc ? 1 : 0, status, image_url]
-      );
+      const connection = await db.getConnection();
 
-      const [rows] = await db.query(
-        `${propertySelect}
-         WHERE p.id = ?`,
-        [result.insertId]
-      );
+      try {
+        await connection.beginTransaction();
 
-      res.status(201).json({
-        message: 'Property saved successfully.',
-        property: rows[0]
-      });
+        const [propertyResult] = await connection.query(
+          `INSERT INTO properties (owner_id, title, address, property_type, unit_count, location, description, has_ac, has_parking, has_room_service, has_private_wc, image_url, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            owner_id || null,
+            title,
+            address,
+            property_type,
+            totalUnits,
+            location,
+            description,
+            has_ac ? 1 : 0,
+            has_parking ? 1 : 0,
+            has_room_service ? 1 : 0,
+            has_private_wc ? 1 : 0,
+            image_url,
+            status
+          ]
+        );
+
+        const propertyId = propertyResult.insertId;
+
+        await connection.query(
+          `INSERT INTO accommodations (id, owner_id, property_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url)
+           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            propertyId,
+            owner_id || null,
+            title,
+            description,
+            0,
+            location,
+            address,
+            property_type,
+            totalUnits,
+            has_ac ? 1 : 0,
+            has_parking ? 1 : 0,
+            has_room_service ? 1 : 0,
+            has_private_wc ? 1 : 0,
+            status,
+            image_url
+          ]
+        );
+
+        await connection.commit();
+
+        const [rows] = await connection.query(
+          `${propertySelect}
+           WHERE p.id = ?`,
+          [propertyId]
+        );
+
+        res.status(201).json({
+          message: 'Property saved successfully.',
+          property: rows[0]
+        });
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
     } catch (error) {
       console.error('Error saving property:', error);
       res.status(500).json({ message: 'Server error while saving property.' });
@@ -196,6 +247,157 @@ module.exports = function (db) {
     } catch (error) {
       console.error('Error updating property status:', error);
       res.status(500).json({ message: 'Server error while updating property status.' });
+    }
+  });
+
+  router.patch('/properties/:id', async (req, res) => {
+    const propertyId = Number(req.params.id);
+    const { owner_id, title, description, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, image_url } = req.body || {};
+
+    if (!Number.isInteger(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ message: 'Property ID is invalid.' });
+    }
+
+    if (!Number.isInteger(Number(owner_id)) || Number(owner_id) <= 0) {
+      return res.status(400).json({ message: 'owner_id is required and must be a valid positive number.' });
+    }
+
+    const updates = [];
+    const propertyUpdates = [];
+    const values = [];
+    const propertyValues = [];
+
+    if (typeof title === 'string' && title.trim()) {
+      updates.push('title = ?');
+      propertyUpdates.push('title = ?');
+      values.push(title.trim());
+      propertyValues.push(title.trim());
+    }
+
+    if (typeof description === 'string' && description.trim()) {
+      updates.push('description = ?');
+      propertyUpdates.push('description = ?');
+      values.push(description.trim());
+      propertyValues.push(description.trim());
+    }
+
+    if (typeof location === 'string' && location.trim()) {
+      updates.push('location = ?');
+      propertyUpdates.push('location = ?');
+      values.push(location.trim());
+      propertyValues.push(location.trim());
+    }
+
+    if (typeof address !== 'undefined') {
+      updates.push('address = ?');
+      propertyUpdates.push('address = ?');
+      const safeAddress = address && String(address).trim() ? String(address).trim() : null;
+      values.push(safeAddress);
+      propertyValues.push(safeAddress);
+    }
+
+    if (typeof property_type === 'string' && property_type.trim()) {
+      updates.push('property_type = ?');
+      propertyUpdates.push('property_type = ?');
+      values.push(property_type.trim());
+      propertyValues.push(property_type.trim());
+    }
+
+    if (typeof unit_count !== 'undefined' && unit_count !== null && unit_count !== '') {
+      const parsedUnits = Number(unit_count);
+      if (!Number.isFinite(parsedUnits) || parsedUnits <= 0) {
+        return res.status(400).json({ message: 'unit_count must be a positive number.' });
+      }
+      updates.push('unit_count = ?');
+      propertyUpdates.push('unit_count = ?');
+      values.push(parsedUnits);
+      propertyValues.push(parsedUnits);
+    }
+
+    if (typeof has_ac !== 'undefined') {
+      updates.push('has_ac = ?');
+      propertyUpdates.push('has_ac = ?');
+      const boolValue = Boolean(has_ac) ? 1 : 0;
+      values.push(boolValue);
+      propertyValues.push(boolValue);
+    }
+
+    if (typeof has_parking !== 'undefined') {
+      updates.push('has_parking = ?');
+      propertyUpdates.push('has_parking = ?');
+      const boolValue = Boolean(has_parking) ? 1 : 0;
+      values.push(boolValue);
+      propertyValues.push(boolValue);
+    }
+
+    if (typeof has_room_service !== 'undefined') {
+      updates.push('has_room_service = ?');
+      propertyUpdates.push('has_room_service = ?');
+      const boolValue = Boolean(has_room_service) ? 1 : 0;
+      values.push(boolValue);
+      propertyValues.push(boolValue);
+    }
+
+    if (typeof has_private_wc !== 'undefined') {
+      updates.push('has_private_wc = ?');
+      propertyUpdates.push('has_private_wc = ?');
+      const boolValue = Boolean(has_private_wc) ? 1 : 0;
+      values.push(boolValue);
+      propertyValues.push(boolValue);
+    }
+
+    if (typeof image_url !== 'undefined') {
+      updates.push('image_url = ?');
+      propertyUpdates.push('image_url = ?');
+      const safeImageUrl = image_url && String(image_url).trim() ? String(image_url).trim() : null;
+      values.push(safeImageUrl);
+      propertyValues.push(safeImageUrl);
+    }
+
+    if (!updates.length) {
+      return res.status(400).json({ message: 'No property changes were provided.' });
+    }
+
+    try {
+      const [existing] = await db.query(
+        'SELECT id, owner_id, property_id FROM accommodations WHERE id = ? AND property_id IS NULL LIMIT 1',
+        [propertyId]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({ message: 'Property not found.' });
+      }
+
+      if (Number(existing[0].owner_id) !== Number(owner_id)) {
+        return res.status(403).json({ message: 'You can only update your own property details.' });
+      }
+
+      values.push(propertyId, Number(owner_id));
+      propertyValues.push(propertyId, Number(owner_id));
+
+      await db.query(
+        `UPDATE accommodations SET ${updates.join(', ')} WHERE id = ? AND owner_id = ? AND property_id IS NULL`,
+        values
+      );
+
+      await db.query(
+        `UPDATE properties SET ${propertyUpdates.join(', ')} WHERE id = ? AND owner_id = ?`,
+        propertyValues
+      );
+
+      const [updatedRows] = await db.query(
+        `${propertySelect}
+         WHERE p.id = ?`,
+        [propertyId]
+      );
+
+      return res.status(200).json({
+        message: 'Property updated successfully.',
+        property: updatedRows[0]
+      });
+    } catch (error) {
+      console.error('Error updating property details:', error);
+      return res.status(500).json({ message: 'Server error while updating property details.' });
     }
   });
 
