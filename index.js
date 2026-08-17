@@ -108,15 +108,9 @@ async function ensurePropertiesSchema() {
 async function ensureAccommodationSchema() {
     const requiredColumns = [
         { name: 'property_id', definition: 'INT NULL' },
-        { name: 'address', definition: 'VARCHAR(255) NULL' },
-        { name: 'property_type', definition: 'VARCHAR(50) NULL' },
-        { name: 'unit_count', definition: 'INT NULL' },
-        { name: 'has_ac', definition: 'TINYINT(1) DEFAULT 0' },
-        { name: 'has_parking', definition: 'TINYINT(1) DEFAULT 0' },
-        { name: 'has_room_service', definition: 'TINYINT(1) DEFAULT 0' },
-        { name: 'has_private_wc', definition: 'TINYINT(1) DEFAULT 0' },
         { name: 'accommodation_type', definition: 'VARCHAR(20) NULL' },
         { name: 'bed_type', definition: 'VARCHAR(20) NULL' },
+        { name: 'accommodation_image_url', definition: 'VARCHAR(500) NULL' },
         { name: 'max_guests', definition: 'INT NULL' },
         { name: 'max_adults', definition: 'INT NULL' },
         { name: 'max_kids', definition: 'INT NULL' },
@@ -303,7 +297,11 @@ app.get('/api/accommodations', async (req, res) => {
     try {
         // Query the database safely
         const [rows] = await db.query(
-            "SELECT id, owner_id, property_id, title, description, price_per_night, location, status, image_url, property_type, accommodation_type, bed_type, max_guests, max_adults, max_kids, max_babies FROM accommodations WHERE status = 'approved' AND property_id IS NOT NULL AND price_per_night > 0"
+            `SELECT a.id, a.owner_id, a.property_id, a.price_per_night, a.status, a.accommodation_image_url, a.accommodation_type, a.bed_type, a.max_guests, a.max_adults, a.max_kids, a.max_babies,
+                    p.title, p.description, p.location, p.image_url, p.property_type
+             FROM accommodations a
+             LEFT JOIN properties p ON a.property_id = p.id
+             WHERE a.status = 'approved' AND a.property_id IS NOT NULL AND a.price_per_night > 0`
         );
 
         const accommodationsWithImage = rows.map((cabin) => ({

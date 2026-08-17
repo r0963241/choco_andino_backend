@@ -6,19 +6,20 @@ module.exports = function (db) {
   const validAccommodationTypes = ['room', 'cabin'];
   const validBedTypes = ['single', 'double', 'triple'];
 
-  const propertySelect = `SELECT p.id, p.owner_id, p.title, p.description, p.price_per_night, p.location, p.address, p.property_type, p.unit_count, p.has_ac, p.has_parking, p.has_room_service, p.has_private_wc, p.status, p.image_url, p.created_at,
+  const propertySelect = `SELECT p.id, p.owner_id, p.title, p.description, p.location, p.address, p.property_type, p.unit_count, p.has_ac, p.has_parking, p.has_room_service, p.has_private_wc, p.status, p.image_url, p.created_at,
                                  u.name AS owner_name, u.email AS owner_email
-                          FROM accommodations p
+                          FROM properties p
                           LEFT JOIN users u ON u.id = p.owner_id`;
 
-  const accommodationSelect = `SELECT a.id, a.owner_id, a.property_id, a.title, a.description, a.price_per_night, a.location, a.address, a.property_type, a.unit_count, a.has_ac, a.has_parking, a.has_room_service, a.has_private_wc, a.status, a.image_url, a.created_at,
+  const accommodationSelect = `SELECT a.id, a.owner_id, a.property_id, a.price_per_night, a.status, a.accommodation_image_url, a.created_at, a.updated_at,
                                       a.accommodation_type, a.bed_type, a.max_guests, a.max_adults, a.max_kids, a.max_babies,
                                       owner.name AS owner_name, owner.email AS owner_email,
-                                      parent.title AS property_name, parent.address AS property_address, parent.property_type AS parent_property_type,
-                                      parent.location AS property_location, parent.description AS property_description, parent.price_per_night AS property_price_per_night
+                                      parent.id AS parent_property_id, parent.title, parent.description, parent.address, parent.property_type,
+                                      parent.unit_count, parent.has_ac, parent.has_parking, parent.has_room_service, parent.has_private_wc,
+                                      parent.location, parent.image_url, parent.status AS property_status
                                FROM accommodations a
                                LEFT JOIN users owner ON owner.id = a.owner_id
-                               LEFT JOIN accommodations parent ON parent.id = a.property_id`;
+                               LEFT JOIN properties parent ON parent.id = a.property_id`;
 
   function getOccupancyLimits(accommodationType, bedType) {
     if (accommodationType === 'cabin') {
@@ -108,8 +109,8 @@ module.exports = function (db) {
           `SELECT
              SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
              COUNT(*) AS total_count
-           FROM accommodations
-           WHERE owner_id = ? AND property_id IS NULL`,
+           FROM properties
+           WHERE owner_id = ?`,
           [owner_id]
         );
 
@@ -123,73 +124,36 @@ module.exports = function (db) {
         }
       }
 
-      const connection = await db.getConnection();
+      const [result] = await db.query(
+        `INSERT INTO properties (owner_id, title, address, property_type, unit_count, location, description, has_ac, has_parking, has_room_service, has_private_wc, image_url, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          owner_id || null,
+          title,
+          address,
+          property_type,
+          totalUnits,
+          location,
+          description,
+          has_ac ? 1 : 0,
+          has_parking ? 1 : 0,
+          has_room_service ? 1 : 0,
+          has_private_wc ? 1 : 0,
+          image_url,
+          status
+        ]
+      );
 
-      try {
-        await connection.beginTransaction();
+      const [rows] = await db.query(
+        `${propertySelect}
+         WHERE p.id = ?`,
+        [result.insertId]
+      );
 
-        const [propertyResult] = await connection.query(
-          `INSERT INTO properties (owner_id, title, address, property_type, unit_count, location, description, has_ac, has_parking, has_room_service, has_private_wc, image_url, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            owner_id || null,
-            title,
-            address,
-            property_type,
-            totalUnits,
-            location,
-            description,
-            has_ac ? 1 : 0,
-            has_parking ? 1 : 0,
-            has_room_service ? 1 : 0,
-            has_private_wc ? 1 : 0,
-            image_url,
-            status
-          ]
-        );
-
-        const propertyId = propertyResult.insertId;
-
-        await connection.query(
-          `INSERT INTO accommodations (id, owner_id, property_id, title, description, price_per_night, location, address, property_type, unit_count, has_ac, has_parking, has_room_service, has_private_wc, status, image_url)
-           VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            propertyId,
-            owner_id || null,
-            title,
-            description,
-            0,
-            location,
-            address,
-            property_type,
-            totalUnits,
-            has_ac ? 1 : 0,
-            has_parking ? 1 : 0,
-            has_room_service ? 1 : 0,
-            has_private_wc ? 1 : 0,
-            status,
-            image_url
-          ]
-        );
-
-        await connection.commit();
-
-        const [rows] = await connection.query(
-          `${propertySelect}
-           WHERE p.id = ?`,
-          [propertyId]
-        );
-
-        res.status(201).json({
-          message: 'Property saved successfully.',
-          property: rows[0]
-        });
-      } catch (error) {
-        await connection.rollback();
-        throw error;
-      } finally {
-        connection.release();
-      }
+      res.status(201).json({
+        message: 'Property saved successfully.',
+        property: rows[0]
+      });
     } catch (error) {
       console.error('Error saving property:', error);
       res.status(500).json({ message: 'Server error while saving property.' });
@@ -200,7 +164,7 @@ module.exports = function (db) {
     try {
       const [rows] = await db.query(
         `${propertySelect}
-         WHERE p.owner_id = ? AND p.property_id IS NULL
+         WHERE p.owner_id = ?
          ORDER BY p.id DESC`,
         [req.params.ownerId]
       );
@@ -219,7 +183,7 @@ module.exports = function (db) {
     }
 
     try {
-      const statusClause = requestedStatus === 'all' ? 'WHERE p.property_id IS NULL' : 'WHERE p.property_id IS NULL AND p.status = ?';
+      const statusClause = requestedStatus === 'all' ? 'WHERE 1 = 1' : 'WHERE p.status = ?';
       const queryParams = requestedStatus === 'all' ? [] : [requestedStatus];
       const [rows] = await db.query(
         `${propertySelect}
@@ -242,7 +206,18 @@ module.exports = function (db) {
     }
 
     try {
-      await db.query('UPDATE accommodations SET status = ? WHERE id = ? AND property_id IS NULL', [status, req.params.id]);
+      const propertyId = Number(req.params.id);
+      const [existing] = await db.query(
+        'SELECT id FROM properties WHERE id = ? LIMIT 1',
+        [propertyId]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({ message: 'Property not found.' });
+      }
+
+      await db.query('UPDATE properties SET status = ? WHERE id = ?', [status, propertyId]);
+
       res.status(200).json({ message: `Property ${status}.` });
     } catch (error) {
       console.error('Error updating property status:', error);
@@ -360,7 +335,7 @@ module.exports = function (db) {
 
     try {
       const [existing] = await db.query(
-        'SELECT id, owner_id, property_id FROM accommodations WHERE id = ? AND property_id IS NULL LIMIT 1',
+        'SELECT id, owner_id FROM properties WHERE id = ? LIMIT 1',
         [propertyId]
       );
 
@@ -374,11 +349,6 @@ module.exports = function (db) {
 
       values.push(propertyId, Number(owner_id));
       propertyValues.push(propertyId, Number(owner_id));
-
-      await db.query(
-        `UPDATE accommodations SET ${updates.join(', ')} WHERE id = ? AND owner_id = ? AND property_id IS NULL`,
-        values
-      );
 
       await db.query(
         `UPDATE properties SET ${propertyUpdates.join(', ')} WHERE id = ? AND owner_id = ?`,
@@ -405,20 +375,18 @@ module.exports = function (db) {
     const {
       owner_id,
       property_id,
-      title,
-      description,
       price_per_night,
       accommodation_type,
       bed_type,
       max_adults,
       max_kids,
       max_babies,
-      image_url = null,
+      accommodation_image_url = null,
       status = 'approved'
     } = req.body;
 
-    if (!property_id || !title || !description || !accommodation_type || !bed_type || price_per_night === undefined || price_per_night === '') {
-      return res.status(400).json({ message: 'Property, title, description, accommodation type, bed type, and price are required.' });
+    if (!property_id || !accommodation_type || !bed_type || price_per_night === undefined || price_per_night === '') {
+      return res.status(400).json({ message: 'Property ID, accommodation type, bed type, and price are required.' });
     }
 
     if (!validAccommodationTypes.includes(accommodation_type)) {
@@ -468,7 +436,7 @@ module.exports = function (db) {
     try {
       const [properties] = await db.query(
         `${propertySelect}
-         WHERE p.id = ? AND p.owner_id = ? AND p.property_id IS NULL AND p.status = 'approved'`,
+         WHERE p.id = ? AND p.owner_id = ? AND p.status = 'approved'`,
         [property_id, owner_id]
       );
 
@@ -479,26 +447,15 @@ module.exports = function (db) {
       const property = properties[0];
       const [result] = await db.query(
         `INSERT INTO accommodations (
-           owner_id, property_id, title, description, price_per_night, location, address, property_type, unit_count,
-           has_ac, has_parking, has_room_service, has_private_wc, status, image_url,
+           owner_id, property_id, price_per_night, status, accommodation_image_url,
            accommodation_type, bed_type, max_guests, max_adults, max_kids, max_babies
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           owner_id || null,
           property_id,
-          title,
-          description,
           parsedPrice,
-          property.location,
-          property.address,
-          property.property_type,
-          1,
-          property.has_ac ? 1 : 0,
-          property.has_parking ? 1 : 0,
-          property.has_room_service ? 1 : 0,
-          property.has_private_wc ? 1 : 0,
           status,
-          image_url,
+          accommodation_image_url,
           accommodation_type,
           bed_type,
           totalGuests,
@@ -537,6 +494,168 @@ module.exports = function (db) {
     } catch (error) {
       console.error('Error fetching owner accommodations:', error);
       res.status(500).json({ message: 'Server error while fetching owner accommodations.' });
+    }
+  });
+
+  // Blocks edit/delete while a booking is still pending, confirmed, or completed.
+  async function hasActiveBooking(accommodationId) {
+    const [rows] = await db.query(
+      `SELECT id FROM bookings WHERE accommodation_id = ? AND status IN ('pending', 'confirmed', 'completed') LIMIT 1`,
+      [accommodationId]
+    );
+    return rows.length > 0;
+  }
+
+  router.put('/:id', async (req, res) => {
+    const accommodationId = Number(req.params.id);
+    const {
+      owner_id,
+      accommodation_type,
+      bed_type,
+      price_per_night,
+      max_adults,
+      max_kids,
+      max_babies,
+      accommodation_image_url
+    } = req.body;
+
+    if (!Number.isFinite(accommodationId) || accommodationId <= 0) {
+      return res.status(400).json({ message: 'accommodation id must be a valid positive number.' });
+    }
+
+    if (!accommodation_type || !bed_type || price_per_night === undefined || price_per_night === '') {
+      return res.status(400).json({ message: 'Accommodation type, bed type, and price are required.' });
+    }
+
+    if (!validAccommodationTypes.includes(accommodation_type)) {
+      return res.status(400).json({ message: 'Accommodation type must be room or cabin.' });
+    }
+
+    if (!validBedTypes.includes(bed_type)) {
+      return res.status(400).json({ message: 'Bed type must be single, double, or triple.' });
+    }
+
+    const parsedPrice = Number(price_per_night);
+    const adults = parseCount(max_adults);
+    const kids = parseCount(max_kids);
+    const babies = parseCount(max_babies);
+
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      return res.status(400).json({ message: 'Price must be a positive number.' });
+    }
+
+    if ([adults, kids, babies].some((value) => Number.isNaN(value))) {
+      return res.status(400).json({ message: 'Occupancy values must be valid positive numbers or zero.' });
+    }
+
+    const limits = getOccupancyLimits(accommodation_type, bed_type);
+    const totalGuests = adults + kids + babies;
+
+    if (adults > limits.maxAdults) {
+      return res.status(400).json({ message: `This ${accommodation_type} allows a maximum of ${limits.maxAdults} adults.` });
+    }
+
+    if (kids > limits.maxKids) {
+      return res.status(400).json({ message: `This ${accommodation_type} allows a maximum of ${limits.maxKids} kids.` });
+    }
+
+    if (babies > limits.maxBabies) {
+      return res.status(400).json({ message: `This ${accommodation_type} allows a maximum of ${limits.maxBabies} babies.` });
+    }
+
+    if (kids + babies > limits.combinedKidsBabiesLimit) {
+      return res.status(400).json({ message: 'This accommodation exceeds the allowed kids and babies combination.' });
+    }
+
+    if (totalGuests === 0 || totalGuests > limits.maxGuests) {
+      return res.status(400).json({ message: `This ${accommodation_type} supports up to ${limits.maxGuests} total guests.` });
+    }
+
+    try {
+      const [existing] = await db.query(
+        'SELECT id, owner_id FROM accommodations WHERE id = ? LIMIT 1',
+        [accommodationId]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({ message: 'Accommodation not found.' });
+      }
+
+      if (Number(existing[0].owner_id) !== Number(owner_id)) {
+        return res.status(403).json({ message: 'You can only edit your own accommodations.' });
+      }
+
+      if (await hasActiveBooking(accommodationId)) {
+        return res.status(409).json({ message: 'This accommodation cannot be edited while it has a pending, confirmed, or completed booking.' });
+      }
+
+      await db.query(
+        `UPDATE accommodations SET
+           accommodation_type = ?, bed_type = ?, price_per_night = ?, accommodation_image_url = ?,
+           max_guests = ?, max_adults = ?, max_kids = ?, max_babies = ?
+         WHERE id = ? AND owner_id = ?`,
+        [
+          accommodation_type,
+          bed_type,
+          parsedPrice,
+          accommodation_image_url || null,
+          totalGuests,
+          adults,
+          kids,
+          babies,
+          accommodationId,
+          owner_id
+        ]
+      );
+
+      const [rows] = await db.query(
+        `${accommodationSelect}
+         WHERE a.id = ?`,
+        [accommodationId]
+      );
+
+      return res.status(200).json({
+        message: 'Accommodation updated successfully.',
+        accommodation: rows[0]
+      });
+    } catch (error) {
+      console.error('Error updating accommodation:', error);
+      return res.status(500).json({ message: 'Server error while updating accommodation.' });
+    }
+  });
+
+  router.delete('/:id', async (req, res) => {
+    const accommodationId = Number(req.params.id);
+    const ownerId = req.body.owner_id ?? req.query.owner_id;
+
+    if (!Number.isFinite(accommodationId) || accommodationId <= 0) {
+      return res.status(400).json({ message: 'accommodation id must be a valid positive number.' });
+    }
+
+    try {
+      const [existing] = await db.query(
+        'SELECT id, owner_id FROM accommodations WHERE id = ? LIMIT 1',
+        [accommodationId]
+      );
+
+      if (!existing.length) {
+        return res.status(404).json({ message: 'Accommodation not found.' });
+      }
+
+      if (Number(existing[0].owner_id) !== Number(ownerId)) {
+        return res.status(403).json({ message: 'You can only delete your own accommodations.' });
+      }
+
+      if (await hasActiveBooking(accommodationId)) {
+        return res.status(409).json({ message: 'This accommodation cannot be deleted while it has a pending, confirmed, or completed booking.' });
+      }
+
+      await db.query('DELETE FROM accommodations WHERE id = ? AND owner_id = ?', [accommodationId, ownerId]);
+
+      return res.status(200).json({ message: 'Accommodation deleted successfully.' });
+    } catch (error) {
+      console.error('Error deleting accommodation:', error);
+      return res.status(500).json({ message: 'Server error while deleting accommodation.' });
     }
   });
 

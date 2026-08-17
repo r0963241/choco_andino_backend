@@ -224,7 +224,7 @@ module.exports = function (db) {
       }
 
       const [accommodations] = await db.query(
-        `SELECT id, title, status, price_per_night, max_guests, max_adults, max_kids, max_babies
+        `SELECT id, status, price_per_night, max_guests, max_adults, max_kids, max_babies
          FROM accommodations
          WHERE id = ? AND property_id IS NOT NULL AND status = 'approved'
          LIMIT 1`,
@@ -288,11 +288,11 @@ module.exports = function (db) {
 
       const [rows] = await db.query(
         `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
-                a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
-                COALESCE(a.image_url, parent.image_url) AS image_url
+                a.price_per_night, a.accommodation_type, a.bed_type, a.accommodation_image_url,
+                p.title, p.location, p.address, p.description, p.property_type, p.image_url, p.has_ac, p.has_parking, p.has_room_service, p.has_private_wc
          FROM bookings b
          LEFT JOIN accommodations a ON a.id = b.accommodation_id
-         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN properties p ON p.id = a.property_id
          WHERE b.id = ?
          LIMIT 1`,
         [result.insertId]
@@ -327,11 +327,11 @@ module.exports = function (db) {
     try {
       const [rows] = await db.query(
         `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
-                a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
-                COALESCE(a.image_url, parent.image_url) AS image_url
+                a.price_per_night, a.accommodation_type, a.bed_type, a.accommodation_image_url,
+                p.title, p.location, p.address, p.description, p.property_type, p.image_url, p.has_ac, p.has_parking, p.has_room_service, p.has_private_wc
          FROM bookings b
          LEFT JOIN accommodations a ON a.id = b.accommodation_id
-         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN properties p ON p.id = a.property_id
          WHERE b.visitor_id = ?
          ORDER BY b.booking_date DESC, b.id DESC`,
         [parsedVisitorId]
@@ -360,13 +360,12 @@ module.exports = function (db) {
       const params = requestedStatus === 'all' ? [parsedOwnerId] : [parsedOwnerId, requestedStatus];
       const [rows] = await db.query(
         `SELECT b.id, b.visitor_id, b.accommodation_id, b.booking_date, b.check_in_date, b.check_out_date, b.adults, b.kids, b.babies, b.total_price, b.action, b.action_at, b.status,
-                a.title AS accommodation_title, a.location AS accommodation_location, a.price_per_night,
-                COALESCE(a.image_url, parent.image_url) AS image_url,
-                v.name AS visitor_name, v.email AS visitor_email,
-                parent.title AS property_title
+                a.price_per_night, a.accommodation_type, a.bed_type, a.accommodation_image_url,
+                p.title, p.location, p.address, p.description, p.property_type, p.image_url, p.has_ac, p.has_parking, p.has_room_service, p.has_private_wc,
+                v.name AS visitor_name, v.email AS visitor_email
          FROM bookings b
          INNER JOIN accommodations a ON a.id = b.accommodation_id
-         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN properties p ON p.id = a.property_id
          LEFT JOIN users v ON v.id = b.visitor_id
          WHERE a.owner_id = ?
          ${statusClause}
@@ -390,12 +389,12 @@ module.exports = function (db) {
     try {
       const [rows] = await db.query(
         `SELECT b.id, b.status, b.booking_date, b.check_in_date, b.check_out_date, b.total_price,
-                COALESCE(parent.id, a.id) AS property_id,
-                COALESCE(parent.title, a.title) AS property_title,
-                a.title AS accommodation_title
+                a.property_id,
+                p.title AS property_title,
+                a.accommodation_type
          FROM bookings b
          INNER JOIN accommodations a ON a.id = b.accommodation_id
-         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN properties p ON p.id = a.property_id
          WHERE a.owner_id = ?
          ORDER BY COALESCE(b.check_in_date, b.booking_date) DESC, b.id DESC`,
         [parsedOwnerId]
@@ -412,14 +411,14 @@ module.exports = function (db) {
     try {
       const [rows] = await db.query(
         `SELECT b.id, b.status, b.booking_date, b.check_in_date, b.check_out_date, b.total_price,
-                COALESCE(parent.id, a.id) AS property_id,
-                COALESCE(parent.title, a.title) AS property_title,
+                a.property_id,
+                p.title AS property_title,
                 a.owner_id,
                 u.name AS owner_name,
-                a.title AS accommodation_title
+                a.accommodation_type
          FROM bookings b
          INNER JOIN accommodations a ON a.id = b.accommodation_id
-         LEFT JOIN accommodations parent ON parent.id = a.property_id
+         LEFT JOIN properties p ON p.id = a.property_id
          LEFT JOIN users u ON u.id = a.owner_id
          ORDER BY COALESCE(b.check_in_date, b.booking_date) DESC, b.id DESC`,
         []
