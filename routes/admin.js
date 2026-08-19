@@ -3,6 +3,9 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 
 module.exports = function (db) {
+  // Primary admin ID from environment
+  const PRIMARY_ADMIN_ID = Number(process.env.PRIMARY_ADMIN_ID);
+
   function requireAdmin(req, res, next) {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -124,7 +127,7 @@ module.exports = function (db) {
       return res.status(400).json({ message: 'userId must be a valid positive number.' });
     }
 
-    if (userId === 10) {
+    if (userId === PRIMARY_ADMIN_ID) {
       return res.status(403).json({ message: 'The primary admin account cannot be disabled or deleted.' });
     }
 
@@ -155,17 +158,14 @@ module.exports = function (db) {
   router.delete('/users/:userId', requireAdmin, async (req, res) => {
     const userId = Number(req.params.userId);
     const actingAdminId = req.user?.id;
+    const adminReason = String(req.body?.adminReason || '').trim();
 
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ message: 'userId must be a valid positive number.' });
     }
 
-    if (userId === 1) {
-      return res.status(403).json({ message: 'User ID 1 (primary owner) cannot be deleted.' });
-    }
-
-    if (userId === 10) {
-      return res.status(403).json({ message: 'The primary admin account cannot be disabled or deleted.' });
+    if (userId === PRIMARY_ADMIN_ID) {
+      return res.status(403).json({ message: `User ID ${PRIMARY_ADMIN_ID} (primary admin) cannot be deleted.` });
     }
 
     try {
@@ -181,7 +181,7 @@ module.exports = function (db) {
       const targetUser = users[0];
 
       // Prevent non-primary admins from deleting other admins
-      if (targetUser.role === 'admin' && actingAdminId !== 10) {
+      if (targetUser.role === 'admin' && actingAdminId !== PRIMARY_ADMIN_ID) {
         await db.query(
           `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
            SELECT ?, ?, ?, ?, ?, name, 'soft', 'failed', 'Only primary admin can delete admin accounts'
@@ -222,10 +222,14 @@ module.exports = function (db) {
         [`Deleted User ${userId}`, `deleted-${userId}@anonymous.local`, userId]
       );
 
+      const deletionReason = adminReason
+        ? `Admin reason: ${adminReason}. User anonymized. ${preservedCount} confirmed/completed bookings preserved`
+        : `User anonymized. ${preservedCount} confirmed/completed bookings preserved`;
+
       await db.query(
         `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
          VALUES (?, ?, ?, ?, ?, ?, 'soft', 'success', ?)`,
-        [userId, targetUser.name, targetUser.email, targetUser.role, actingAdminId, adminName, `User anonymized. ${preservedCount} confirmed/completed bookings preserved`]
+        [userId, targetUser.name, targetUser.email, targetUser.role, actingAdminId, adminName, deletionReason]
       );
 
       return res.status(200).json({
@@ -246,28 +250,20 @@ module.exports = function (db) {
       return res.status(403).json({ message: 'Primary admin identity is missing.' });
     }
 
-    if (actingAdminId !== 10) {
-      return res.status(403).json({ message: 'Only the primary admin (ID 10) can use this emergency override.' });
+    if (actingAdminId !== PRIMARY_ADMIN_ID) {
+      return res.status(403).json({ message: `Only the primary admin (ID ${PRIMARY_ADMIN_ID}) can use this emergency override.` });
     }
 
     if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
       return res.status(400).json({ message: 'Target userId must be a valid positive number.' });
     }
 
-    if (targetUserId === 1) {
+    if (targetUserId === PRIMARY_ADMIN_ID) {
       await db.query(
         `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
-         VALUES (?, 'Protected User', 'protected@system.local', 'owner', ?, 'Primary Admin', 'hard', 'failed', 'User ID 1 is protected and cannot be deleted')`
+         VALUES (?, 'Protected User', 'protected@system.local', 'admin', ?, 'Primary Admin', 'hard', 'failed', ?)`,[targetUserId, actingAdminId, `User ID ${PRIMARY_ADMIN_ID} is protected and cannot be deleted`]
       );
-      return res.status(403).json({ message: 'User ID 1 (primary owner) is protected and cannot be deleted.' });
-    }
-
-    if (targetUserId === 10) {
-      await db.query(
-        `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
-         VALUES (?, 'Primary Admin', 'admin@system.local', 'admin', ?, 'Primary Admin', 'hard', 'failed', 'Primary admin cannot delete itself')`
-      );
-      return res.status(403).json({ message: 'The primary admin account cannot be hard deleted.' });
+      return res.status(403).json({ message: `User ID ${PRIMARY_ADMIN_ID} (primary admin) is protected and cannot be deleted.` });
     }
 
     try {
