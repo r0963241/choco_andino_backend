@@ -624,6 +624,86 @@ module.exports = function (db) {
     }
   });
 
+  // Delete property endpoint - deletes property and its accommodations if no active bookings
+  // IMPORTANT: This must come BEFORE the generic /:id route, or requests will match /:id first
+  router.delete('/properties/:id', async (req, res) => {
+    const propertyId = Number(req.params.id);
+    const ownerId = req.body.owner_id ?? req.query.owner_id;
+
+    console.log('DELETE /properties/:id called with propertyId:', propertyId, 'ownerId:', ownerId);
+
+    if (!Number.isFinite(propertyId) || propertyId <= 0) {
+      return res.status(400).json({ message: 'Property ID must be a valid positive number.' });
+    }
+
+    if (!Number.isFinite(Number(ownerId)) || Number(ownerId) <= 0) {
+      return res.status(400).json({ message: 'owner_id is required and must be a valid positive number.' });
+    }
+
+    try {
+      // Verify property exists and belongs to owner
+      const [propertyCheck] = await db.query(
+        'SELECT id, owner_id FROM properties WHERE id = ? LIMIT 1',
+        [propertyId]
+      );
+
+      if (!propertyCheck.length) {
+        return res.status(404).json({ message: 'Property not found.' });
+      }
+
+      if (Number(propertyCheck[0].owner_id) !== Number(ownerId)) {
+        return res.status(403).json({ message: 'You can only delete your own properties.' });
+      }
+
+      // Get all accommodations for this property
+      const [accommodations] = await db.query(
+        'SELECT id FROM accommodations WHERE property_id = ?',
+        [propertyId]
+      );
+
+      // Check if any accommodation has active bookings
+      if (accommodations.length > 0) {
+        const accommodationIds = accommodations.map(a => a.id);
+        const placeholders = accommodationIds.map(() => '?').join(',');
+        
+        const [activeBookings] = await db.query(
+          `SELECT id FROM bookings 
+           WHERE accommodation_id IN (${placeholders}) 
+           AND status IN ('pending', 'confirmed', 'completed') 
+           LIMIT 1`,
+          accommodationIds
+        );
+
+        if (activeBookings.length > 0) {
+          return res.status(409).json({ 
+            message: 'This property cannot be deleted while its accommodations have active bookings. Please cancel or complete all bookings first.' 
+          });
+        }
+      }
+
+      // Delete accommodations first (to be explicit, though foreign key would cascade)
+      if (accommodations.length > 0) {
+        const accommodationIds = accommodations.map(a => a.id);
+        const placeholders = accommodationIds.map(() => '?').join(',');
+        await db.query(
+          `DELETE FROM accommodations WHERE id IN (${placeholders})`,
+          accommodationIds
+        );
+      }
+
+      // Delete the property
+      await db.query('DELETE FROM properties WHERE id = ? AND owner_id = ?', [propertyId, ownerId]);
+
+      return res.status(200).json({ 
+        message: 'Property and its accommodations deleted successfully.',
+        deletedAccommodationsCount: accommodations.length
+      });
+    } catch (error) {
+      console.error('Error deleting property:', error);
+      return res.status(500).json({ message: 'Server error while deleting property.' });
+    }
+  });
+
   router.delete('/:id', async (req, res) => {
     const accommodationId = Number(req.params.id);
     const ownerId = req.body.owner_id ?? req.query.owner_id;
