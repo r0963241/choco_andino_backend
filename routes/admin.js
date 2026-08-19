@@ -41,6 +41,45 @@ module.exports = function (db) {
     }
   });
 
+  // Get user deletion history - MUST come before parameterized /users/:userId routes
+  router.get('/users/deletion-history', requireAdmin, async (req, res) => {
+    try {
+      const [history] = await db.query(
+        `SELECT id, deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, 
+                deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, 
+                deletion_reason, deleted_at
+         FROM user_deletion_history
+         ORDER BY deleted_at DESC
+         LIMIT 100`
+      );
+
+      return res.status(200).json(history);
+    } catch (error) {
+      console.error('Error fetching deletion history:', error);
+      return res.status(500).json({ message: 'Server error while fetching deletion history.' });
+    }
+  });
+
+  // Get deletion history statistics
+  router.get('/users/deletion-history/stats', requireAdmin, async (req, res) => {
+    try {
+      const [stats] = await db.query(
+        `SELECT
+          COUNT(*) AS total_deletions,
+          SUM(CASE WHEN deletion_status = 'success' THEN 1 ELSE 0 END) AS successful_deletions,
+          SUM(CASE WHEN deletion_status = 'failed' THEN 1 ELSE 0 END) AS failed_deletions,
+          SUM(CASE WHEN deletion_method = 'soft' THEN 1 ELSE 0 END) AS soft_deletions,
+          SUM(CASE WHEN deletion_method = 'hard' THEN 1 ELSE 0 END) AS hard_deletions
+         FROM user_deletion_history`
+      );
+
+      return res.status(200).json(stats[0] || {});
+    } catch (error) {
+      console.error('Error fetching deletion stats:', error);
+      return res.status(500).json({ message: 'Server error while fetching deletion statistics.' });
+    }
+  });
+
   router.patch('/users/:userId/role', requireAdmin, async (req, res) => {
     const userId = Number(req.params.userId);
     const { role } = req.body || {};
@@ -115,9 +154,14 @@ module.exports = function (db) {
 
   router.delete('/users/:userId', requireAdmin, async (req, res) => {
     const userId = Number(req.params.userId);
+    const actingAdminId = req.user?.id;
 
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(400).json({ message: 'userId must be a valid positive number.' });
+    }
+
+    if (userId === 1) {
+      return res.status(403).json({ message: 'User ID 1 (primary owner) cannot be deleted.' });
     }
 
     if (userId === 10) {
@@ -134,6 +178,19 @@ module.exports = function (db) {
         return res.status(404).json({ message: 'User not found.' });
       }
 
+      const targetUser = users[0];
+
+      // Prevent non-primary admins from deleting other admins
+      if (targetUser.role === 'admin' && actingAdminId !== 10) {
+        await db.query(
+          `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+           SELECT ?, ?, ?, ?, ?, name, 'soft', 'failed', 'Only primary admin can delete admin accounts'
+           FROM users WHERE id = ? LIMIT 1`,
+          [userId, targetUser.name, targetUser.email, targetUser.role, actingAdminId, actingAdminId]
+        );
+        return res.status(403).json({ message: 'Only the primary admin can delete admin accounts.' });
+      }
+
       const [bookingStats] = await db.query(
         `SELECT
           COUNT(*) AS total_bookings,
@@ -144,6 +201,12 @@ module.exports = function (db) {
       );
 
       const preservedCount = Number(bookingStats?.[0]?.preserved_confirmed_completed || 0);
+
+      const [adminInfo] = await db.query(
+        'SELECT name FROM users WHERE id = ? LIMIT 1',
+        [actingAdminId]
+      );
+      const adminName = adminInfo?.[0]?.name || 'Unknown Admin';
 
       await db.query(
         `UPDATE users
@@ -157,6 +220,12 @@ module.exports = function (db) {
            is_active = 0
          WHERE id = ?`,
         [`Deleted User ${userId}`, `deleted-${userId}@anonymous.local`, userId]
+      );
+
+      await db.query(
+        `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+         VALUES (?, ?, ?, ?, ?, ?, 'soft', 'success', ?)`,
+        [userId, targetUser.name, targetUser.email, targetUser.role, actingAdminId, adminName, `User anonymized. ${preservedCount} confirmed/completed bookings preserved`]
       );
 
       return res.status(200).json({
@@ -185,7 +254,19 @@ module.exports = function (db) {
       return res.status(400).json({ message: 'Target userId must be a valid positive number.' });
     }
 
+    if (targetUserId === 1) {
+      await db.query(
+        `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+         VALUES (?, 'Protected User', 'protected@system.local', 'owner', ?, 'Primary Admin', 'hard', 'failed', 'User ID 1 is protected and cannot be deleted')`
+      );
+      return res.status(403).json({ message: 'User ID 1 (primary owner) is protected and cannot be deleted.' });
+    }
+
     if (targetUserId === 10) {
+      await db.query(
+        `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+         VALUES (?, 'Primary Admin', 'admin@system.local', 'admin', ?, 'Primary Admin', 'hard', 'failed', 'Primary admin cannot delete itself')`
+      );
       return res.status(403).json({ message: 'The primary admin account cannot be hard deleted.' });
     }
 
@@ -200,10 +281,20 @@ module.exports = function (db) {
       }
 
       if (String(users[0].role || '').trim().toLowerCase() !== 'admin') {
+        await db.query(
+          `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+           VALUES (?, ?, ?, ?, ?, 'Primary Admin', 'hard', 'failed', 'Target is not an admin account')`
+        );
         return res.status(400).json({ message: 'This emergency hard-delete route is only for admin accounts.' });
       }
 
       await db.query('DELETE FROM users WHERE id = ?', [targetUserId]);
+
+      // Log successful hard deletion
+      await db.query(
+        `INSERT INTO user_deletion_history (deleted_user_id, deleted_user_name, deleted_user_email, deleted_user_role, deleted_by_admin_id, deleted_by_admin_name, deletion_method, deletion_status, deletion_reason)
+         VALUES (?, ?, ?, ?, ?, 'Primary Admin', 'hard', 'success', 'Admin account permanently hard deleted')`
+      );
 
       return res.status(200).json({
         message: 'Undesirable admin account was hard deleted by the primary admin.',
